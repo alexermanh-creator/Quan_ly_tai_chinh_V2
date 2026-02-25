@@ -86,6 +86,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("❌ Lỗi: Không thể xóa.")
 
+# --- BỘ PHẬN MỚI CHUYÊN XỬ LÝ CLICK VÀO /1, /2 ---
+async def handle_transaction_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    trx_id = update.message.text[1:] # Loại bỏ dấu / để lấy số ID
+    hist = HistoryModule(update.effective_user.id)
+    content, kb = hist.get_detail_view(trx_id)
+    await update.message.reply_html(content, reply_markup=kb)
+
 # --- XỬ LÝ MESSAGE ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -95,13 +103,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     text = update.message.text
     user_id = update.effective_user.id
-
-    if re.match(r'^/\d+$', text):
-        trx_id = text[1:]
-        hist = HistoryModule(user_id)
-        content, kb = hist.get_detail_view(trx_id)
-        await update.message.reply_html(content, reply_markup=kb)
-        return
 
     # --- NHÓM 1: ƯU TIÊN NÚT BẤM (EXACT MATCH) ---
     if text == "📊 Chứng Khoán":
@@ -149,20 +150,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- NHÓM 3: PARSER GIAO DỊCH VÀ CHỐT CHẶN TIỀN ---
     parsed = CommandParser.parse_transaction(text)
     if parsed:
-        # Nếu là hành động tốn tiền (Mua tài sản hoặc Rút tiền)
         if parsed['action'] in ['BUY', 'OUT', 'WITHDRAW']:
             current_cash = repo.get_available_cash(user_id)
             if parsed['total_val'] > current_cash:
                 await update.message.reply_html("<b>Hết tiền rồi chủ tịch ơi!!!</b>")
                 return
 
-        # Vượt qua chốt chặn -> Lưu giao dịch
         repo.save_transaction(user_id, parsed['ticker'], parsed['asset_type'], parsed['qty'], parsed['price'], parsed['total_val'], parsed['action'])
         await update.message.reply_html(f"✅ <b>Ghi nhận:</b> <code>{text.upper()}</code>\n💰: <b>{parsed['total_val']:,.0f}đ</b>"); return
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
+    
+    # Đăng ký lệnh /start
     application.add_handler(CommandHandler('start', start))
+    
+    # 💥 BỘ LỌC ĐẶC NHIỆM: Bắt ngay lập tức mọi tin nhắn dạng /1, /2, /100...
+    application.add_handler(MessageHandler(filters.Regex(r'^/\d+$'), handle_transaction_click))
+    
+    # Đăng ký Callback (Nút bấm dưới tin nhắn)
     application.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Đăng ký xử lý text thường (đã bị loại trừ các lệnh bắt đầu bằng / )
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
     print("🚀 Bot Finance v2.0 - System Online."); application.run_polling(drop_pending_updates=True)
