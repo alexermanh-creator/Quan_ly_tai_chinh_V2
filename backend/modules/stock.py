@@ -24,7 +24,7 @@ class StockModule(BaseModule):
             cursor.execute("SELECT ticker, qty, price, total_value, type FROM transactions WHERE user_id = ? AND asset_type = 'STOCK'", (self.user_id,))
             rows = cursor.fetchall()
 
-            if not rows: return "❌ <b>Chưa có dữ liệu để lập báo cáo chuyên sâu.</b>"
+            if not rows: return "❌ <b>Hệ thống chưa ghi nhận dữ liệu giao dịch STOCK.</b>"
 
             # 2. Logic dòng tiền chuẩn
             total_deposit = 0
@@ -81,7 +81,8 @@ class StockModule(BaseModule):
 
             for item in ticker_stats:
                 pct = (item['val'] / current_mkt_val * 100) if current_mkt_val > 0 else 0
-                bar = "🔵" * int(pct/10) + "⚪" * (10 - int(pct/10))
+                bar_count = int(pct/10)
+                bar = "🔵" * bar_count + "⚪" * (10 - bar_count)
                 lines.append(f"• {item['tk']}: {pct:.1f}%\n  {bar}")
 
             lines.extend([
@@ -105,7 +106,7 @@ class StockModule(BaseModule):
             transactions = cursor.fetchall()
 
             if not transactions:
-                return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu giao dịch."
+                return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu giao dịch chứng khoán."
 
             portfolio = {}
             total_deposit = 0 
@@ -137,14 +138,19 @@ class StockModule(BaseModule):
                 mkt_val = data['qty'] * curr_price * 1000
                 profit = mkt_val - data['total_cost']
                 roi = (profit / data['total_cost'] * 100) if data['total_cost'] > 0 else 0
+                
                 total_market_value += mkt_val
                 stats.append({'ticker': tk, 'roi': roi, 'value': mkt_val})
 
+                # ĐÃ FIX: Sửa lỗi curr_p thành curr_price
                 stock_details.append(
                     f"<b>{tk}</b>\nSL: {data['qty']:,.0f}\nGiá vốn TB: {avg_cost_price:,.1f}\n"
-                    f"Giá hiện tại: {curr_p:,.1f}\nGiá trị: {self.format_currency(mkt_val).replace('+', '')}\n" # Sửa curr_p thành curr_price
+                    f"Giá hiện tại: {curr_price:,.1f}\nGiá trị: {self.format_currency(mkt_val).replace('+', '')}\n"
                     f"Lãi: {self.format_currency(profit)} ({roi:+.1f}%)"
                 )
+
+            if not stats:
+                return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nHiện tại danh mục trống."
 
             total_net_cost = total_deposit - total_withdraw
             total_profit_all = total_market_value - total_net_cost
