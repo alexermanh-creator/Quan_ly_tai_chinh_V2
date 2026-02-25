@@ -1,46 +1,56 @@
 # backend/core/parser.py
-import re
-from backend.core.registry import ASSET_REGISTRY, COMMAND_MAP
+from backend.core.registry import AssetResolver
 
 class CommandParser:
     @staticmethod
     def parse_transaction(text):
         """
-        Cú pháp: [mã] [lệnh] [số lượng] [giá]
-        Ví dụ: vpb buy 100 22.5 hoặc btc buy 0.01 95000
+        Cú pháp tối giản: [Prefix] [Ticker] [Qty] [Price]
+        Ví dụ: 
+        S VPB 100 22.5  -> Mua 100 VPB giá 22.5
+        S VPB -50 23.0  -> Bán 50 VPB giá 23.0
+        C BTC 0.01 95000 -> Mua 0.01 BTC giá 95000
         """
         try:
-            # Loại bỏ khoảng trắng thừa và tách từ
-            parts = text.lower().strip().split()
+            parts = text.strip().split()
             
-            # Kiểm tra xem có đủ tối thiểu 4 phần tử không
-            if len(parts) < 4:
+            # Kiểm tra tối thiểu phải có 3 phần (Nếu ko dùng prefix) hoặc 4 phần (Có prefix)
+            if len(parts) < 3:
                 return None
             
-            ticker = parts[0]
-            action = parts[1].upper() # BUY, SELL, DIVIDEND, IN, OUT
+            # 1. Xác định Tiền tố và Ticker
+            first_part = parts[0].upper()
+            if first_part in ['S', 'C']:
+                # Có tiền tố: S VPB 100 50
+                prefix_and_ticker = f"{parts[0]} {parts[1]}"
+                qty_idx = 2
+                price_idx = 3
+            else:
+                # Không tiền tố: VPB 100 50
+                prefix_and_ticker = parts[0]
+                qty_idx = 1
+                price_idx = 2
+
+            # Gọi Resolver để lấy loại tài sản và mã sạch
+            asset_type, ticker = AssetResolver.resolve(prefix_and_ticker)
             
-            # Xử lý số lượng và giá (chuyển về số thực)
-            try:
-                qty = float(parts[2])
-                price = float(parts[3])
-            except ValueError:
-                return None
+            # 2. Lấy Số lượng và Giá
+            qty = float(parts[qty_idx])
+            price = float(parts[price_idx])
             
-            # Tự động nhận diện loại tài sản (Asset Type)
-            # Nếu mã nằm trong COMMAND_MAP thì lấy loại đó, nếu không mặc định là STOCK
-            asset_type = COMMAND_MAP.get(ticker, 'STOCK')
+            # 3. Định nghĩa hành động dựa trên dấu của Số lượng
+            # Dương là BUY, Âm là SELL
+            action = 'BUY' if qty > 0 else 'SELL'
             
-            # Kiểm tra xem loại tài sản này có được hỗ trợ trong Registry không
-            if asset_type not in ASSET_REGISTRY:
-                return None
-                
+            # Luôn lưu số lượng vào DB là số dương để Engine tính toán thống nhất
+            final_qty = abs(qty)
+            
             return {
-                'ticker': ticker.upper(),
+                'ticker': ticker,
                 'action': action,
-                'qty': qty,
+                'qty': final_qty,
                 'price': price,
-                'total_val': qty * price,
+                'total_val': final_qty * price,
                 'asset_type': asset_type
             }
         except Exception:
@@ -48,7 +58,9 @@ class CommandParser:
 
     @staticmethod
     def is_transaction_command(text):
-        """Kiểm tra nhanh xem tin nhắn có dạng một lệnh giao dịch hay không"""
-        # Kiểm tra nếu bắt đầu bằng một từ và theo sau là buy/sell/in/out/div
-        pattern = r'^\w+\s+(buy|sell|in|out|div|dividend)\s+'
-        return bool(re.match(pattern, text.lower().strip()))
+        """
+        Kiểm tra xem tin nhắn có phải lệnh giao dịch không.
+        Cấu trúc: Có ít nhất 2 khoảng trắng (tương đương 3 phần dữ liệu)
+        """
+        parts = text.strip().split()
+        return len(parts) >= 3 and any(char.isdigit() for char in text)
