@@ -77,3 +77,21 @@ class Repository:
             ''', (user_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    @staticmethod
+    def get_available_cash(user_id):
+        """Đếm số dư Tiền mặt khả dụng để chặn vung tay quá trán"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT SUM(
+                    CASE 
+                        WHEN type IN ('IN', 'DEPOSIT', 'SELL', 'CASH_DIVIDEND') THEN total_value
+                        WHEN type IN ('OUT', 'WITHDRAW', 'BUY') THEN -total_value
+                        ELSE 0
+                    END
+                ) as balance
+                FROM transactions WHERE user_id = ?
+            ''', (user_id,))
+            result = cursor.fetchone()
+            return result['balance'] if result and result['balance'] else 0
