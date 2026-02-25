@@ -17,21 +17,21 @@ class DashboardModule(BaseModule):
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
-            # --- 1. VỐN NẠP HỆ THỐNG ---
+            # 1. VỐN NẠP HỆ THỐNG
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'IN'", (self.user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'OUT'", (self.user_id,))
             t_out = abs(cursor.fetchone()[0] or 0)
             net_invested = t_in - t_out
 
-            # --- 2. TIỀN MẶT KHẢ DỤNG ---
+            # 2. TIỀN MẶT KHẢ DỤNG
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND type = 'BUY' AND asset_type != 'CASH'", (self.user_id,))
             total_spent = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND type = 'SELL' AND asset_type != 'CASH'", (self.user_id,))
             total_received = cursor.fetchone()[0] or 0
             cash_balance = net_invested - total_spent + total_received
 
-            # --- 3. GIÁ TRỊ THỊ TRƯỜNG STOCK ---
+            # 3. GIÁ TRỊ THỊ TRƯỜNG STOCK
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
             
@@ -46,13 +46,14 @@ class DashboardModule(BaseModule):
                 qty = s['current_qty']
                 if qty > 0:
                     tk = s['ticker']
-                    price = price_map.get(tk)
-                    if price is None:
-                        cursor.execute("SELECT price FROM transactions WHERE ticker=? ORDER BY date DESC LIMIT 1", (tk,))
-                        price = cursor.fetchone()[0] or 0
+                    # Ưu tiên lấy giá lệnh cuối cùng
+                    cursor.execute("SELECT price FROM transactions WHERE ticker=? AND user_id=? ORDER BY date DESC LIMIT 1", (tk, self.user_id))
+                    last_p = cursor.fetchone()[0]
+                    # Ghi đè bằng giá manual nếu có
+                    price = price_map.get(tk, last_p)
                     stock_mkt_val += qty * price * 1000
 
-            # --- 4. CRYPTO & KHÁC ---
+            # 4. CRYPTO & KHÁC
             cursor.execute('''
                 SELECT SUM(CASE WHEN type='BUY' THEN qty ELSE -qty END * price) 
                 FROM transactions WHERE user_id = ? AND asset_type = 'CRYPTO'
@@ -62,7 +63,7 @@ class DashboardModule(BaseModule):
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'OTHER'", (self.user_id,))
             other_val = cursor.fetchone()[0] or 0
 
-            # --- 5. TỔNG KẾT ---
+            # 5. TỔNG KẾT
             total_assets = cash_balance + stock_mkt_val + crypto_vnd + other_val
             profit = total_assets - net_invested
             roi = (profit / net_invested * 100) if net_invested > 0 else 0
