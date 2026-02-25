@@ -1,71 +1,74 @@
 # backend/modules/dashboard.py
 from backend.interface import BaseModule
-from datetime import datetime
+from backend.database.db_manager import db
 
 class DashboardModule(BaseModule):
-    def format_smart_number(self, num):
-        """Hàm định dạng số thông minh chuẩn CTO: Tỷ, Triệu hoặc đồng"""
-        abs_num = abs(num)
-        if abs_num >= 1_000_000_000:
-            return f"{num / 1_000_000_000:.2f} tỷ"
-        elif abs_num >= 1_000_000:
-            return f"{num / 1_000_000:.1f} triệu"
-        return f"{num:,.0f} đ"
+    def format_currency(self, value):
+        """Định dạng tiền tệ chuẩn: tỷ, triệu hoặc đồng"""
+        abs_val = abs(value)
+        sign = "-" if value < 0 else ""
+        if abs_val >= 10**9: return f"{sign}{value / 10**9:,.2f} tỷ"
+        if abs_val >= 10**6: return f"{sign}{value / 10**6:,.1f} triệu"
+        return f"{sign}{value:,.0f}đ"
 
     def run(self):
-        """Xây dựng nội dung Dashboard tổng thể với dòng tiền thực tế"""
-        # 1. Lấy dữ liệu danh mục từ các Engine
-        stock_data = self.get_summary_data('STOCK')
-        crypto_data = self.get_summary_data('CRYPTO')
-        
-        # 2. Lấy toàn bộ lịch sử để tính dòng tiền mặt (Cash Flow)
-        transactions = self.repo.get_latest_transactions(self.user_id, limit=5000)
-        
-        total_in = sum(t['total_value'] for t in transactions if t['type'] == 'IN')
-        total_out = sum(t['total_value'] for t in transactions if t['type'] == 'OUT')
-        total_buy = sum(t['total_value'] for t in transactions if t['type'] == 'BUY')
-        total_sell = sum(t['total_value'] for t in transactions if t['type'] == 'SELL')
+        EX_RATE = 26300 # Tỷ giá USDT/VND
+        GOAL = 500_000_000 # Mục tiêu 500tr
 
-        # 3. Tính toán tiền mặt thực tế (Core Cash Logic)
-        # Tiền còn lại = (Tiền vào hệ thống) - (Tiền rời hệ thống)
-        cash_balance = (total_in + total_sell) - (total_out + total_buy)
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Lấy tổng giá trị theo từng loại tài sản
+            cursor.execute('''
+                SELECT asset_type, SUM(total_value) 
+                FROM transactions WHERE user_id = ? 
+                GROUP BY asset_type
+            ''', (self.user_id,))
+            data_map = {row[0]: (row[1] or 0) for row in cursor.fetchall()}
 
-        # 4. Tính toán tổng tài sản thị trường (Net Worth)
-        stock_mkt_val = stock_data['summary']['total_value']
-        crypto_mkt_val = crypto_data['summary']['total_value']
-        other_val = 0 # Sẽ kết nối ở module Tài sản khác
-        
-        # Tổng tài sản = Tiền mặt + Giá trị Chứng khoán + Giá trị Crypto
-        total_net_worth = cash_balance + stock_mkt_val + crypto_mkt_val + other_val
+            # Phân loại tài sản
+            cash = data_map.get('CASH', 0)
+            stock = data_map.get('STOCK', 0)
+            crypto_vnd = data_map.get('CRYPTO', 0) * EX_RATE
+            other = data_map.get('OTHER', 0)
+            
+            total_assets = cash + stock + crypto_vnd + other
 
-        # 5. Tính toán lãi/lỗ danh mục tài sản (Không tính tiền mặt)
-        total_cost = stock_data['summary']['total_cost'] + crypto_data['summary']['total_cost']
-        total_profit = (stock_mkt_val + crypto_mkt_val) - total_cost
-        profit_percent = (total_profit / total_cost * 100) if total_cost > 0 else 0
-        profit_icon = "🟢" if total_profit >= 0 else "🔴"
+            # Tính toán Nạp/Rút để tính Lãi thực tế
+            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND total_value > 0", (self.user_id,))
+            t_in = cursor.fetchone()[0] or 0
+            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND total_value < 0", (self.user_id,))
+            t_out = abs(cursor.fetchone()[0] or 0)
 
-        # 6. Mục tiêu tài chính
-        target_val = 500_000_000 # Config này sẽ đưa vào DB sau
-        progress = (total_net_worth / target_val * 100) if target_val > 0 else 0
-        debt_to_target = max(0, target_val - total_net_worth)
+            net_invested = t_in - t_out
+            profit = total_assets - net_invested
+            roi = (profit / net_invested * 100) if net_invested > 0 else 0
+            
+            # Tính tiến độ mục tiêu
+            progress = (total_assets / GOAL * 100)
+            remain = max(0, GOAL - total_assets)
 
-        # --- GIAO DIỆN TEXT HIỂN THỊ ---
+        # Giao diện HTML chuẩn CTO
         lines = [
             "💼 <b>TÀI SẢN CỦA BẠN</b>",
-            f"💰 Tổng tài sản: <b>{self.format_smart_number(total_net_worth)}</b>",
-            f"📈 Lãi danh mục: {self.format_smart_number(total_profit)} ({profit_icon} {profit_percent:+.1f}%)",
+            f"💰 Tổng: <b>{self.format_currency(total_assets)}</b>",
+            f"📈 Lãi: {self.format_currency(profit)} (🟢 {roi:+.1f}%)",
+            "",
+            f"📊 Stock: {self.format_currency(stock)}",
+            f"🪙 Crypto: {self.format_currency(crypto_vnd)}",
+            f"🥇 Khác: {self.format_currency(other)}",
+            "",
+            f"🎯 Mục tiêu: {self.format_currency(GOAL)}",
+            f"🏁 Tiến độ: {progress:.1f}%",
+            f"Còn thiếu: {self.format_currency(remain)}",
+            "",
+            f"⬆️ Tổng nạp: {self.format_currency(t_in)}",
+            f"⬇️ Tổng rút: {self.format_currency(t_out)}",
             "━━━━━━━━━━━━━━━━━━━",
-            f"🏦 Tiền mặt: <code>{self.format_smart_number(cash_balance)}</code>",
-            f"📊 Cổ phiếu: <code>{self.format_smart_number(stock_mkt_val)}</code>",
-            f"🪙 Crypto: <code>{self.format_smart_number(crypto_mkt_val)}</code>",
-            "",
-            f"🎯 Mục tiêu: {self.format_smart_number(target_val)}",
-            f"🏁 Tiến độ: {progress:.1f}% | Còn thiếu: {self.format_smart_number(debt_to_target)}",
-            "",
-            f"⬆️ Tổng nạp: {self.format_smart_number(total_in)}",
-            f"⬇️ Tổng rút: {self.format_smart_number(total_out)}",
+            f"🏦 Tiền mặt: {self.format_currency(cash)}",
+            f"📊 Cổ phiếu: {self.format_currency(stock)}",
+            f"🪙 Crypto: {self.format_currency(crypto_vnd)}",
             "",
             "🏠 <i>Bấm các nút dưới để quản lý chi tiết.</i>"
         ]
-
         return "\n".join(lines)
