@@ -18,7 +18,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
-# --- HỆ THỐNG MENU (GIỮ NGUYÊN 100% GỐC CỦA CEO) ---
+# --- HỆ THỐNG MENU ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -43,7 +43,7 @@ def get_crypto_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
-# --- XỬ LÝ CALLBACK (CHO NÚT BẤM INLINE) ---
+# --- XỬ LÝ CALLBACK ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -58,7 +58,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, kb = hist.run(page=page, asset_type=a_type)
         await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
-    # ĐÃ SỬA LỖI: Xử lý nút Tìm kiếm 🔍
     elif data == "hist_search_prompt":
         await query.message.reply_html("🔍 <b>TÌM KIẾM LỊCH SỬ</b>\nCEO hãy gõ mã tài sản cần tìm (VD: <code>VPB</code>, <code>BTC</code>)...")
 
@@ -76,7 +75,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"⚠️ <b>XÁC NHẬN XÓA?</b>\n\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")],
-            [InlineKeyboardButton("❌ HỦY", callback_data=f"go_home")]
+            [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
@@ -97,9 +96,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # Đăng ký lệnh /view để đề phòng CEO vẫn gõ lệnh cũ
-    if text.startswith("/view_"):
-        trx_id = text.split("_")[1]
+    # ĐÃ NÂNG CẤP: Bấm vào ✏️ /1 sẽ gọi thẳng đến hàm này
+    if re.match(r'^/\d+$', text):
+        trx_id = text[1:]
         hist = HistoryModule(user_id)
         content, kb = hist.get_detail_view(trx_id)
         await update.message.reply_html(content, reply_markup=kb)
@@ -144,12 +143,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.execute("INSERT INTO manual_prices (ticker, current_price, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(ticker) DO UPDATE SET current_price=excluded.current_price, updated_at=excluded.updated_at", (t, p))
             await update.message.reply_html(f"✅ Đã cập nhật <b>{t}</b>: <code>{p}</code>"); return
 
-    # TÌM KIẾM NHANH (vd: gõ vpb)
     if len(text.split()) == 1 and text.isalpha() and text.lower() not in ["gia", "xoa", "nap", "rut"]:
         content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
 
-    # PARSER GIAO DỊCH
     parsed = CommandParser.parse_transaction(text)
     if parsed:
         repo.save_transaction(user_id, parsed['ticker'], parsed['asset_type'], parsed['qty'], parsed['price'], parsed['total_val'], parsed['action'])
