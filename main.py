@@ -18,8 +18,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
-# --- HỆ THỐNG MENU (GIỮ NGUYÊN 100% BẢN GỐC CỦA CEO) ---
-
+# --- HỆ THỐNG MENU (GIỮ NGUYÊN 100% GỐC) ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -44,8 +43,7 @@ def get_crypto_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
-# --- XỬ LÝ CALLBACK (CHO NÚT BẤM INLINE TRONG HISTORY) ---
-
+# --- XỬ LÝ CALLBACK (CHO NÚT BẤM INLINE) ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -64,17 +62,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dash = DashboardModule(user_id)
         await query.message.reply_html(dash.run(), reply_markup=get_ceo_menu())
 
-    elif data.startswith("view_"):
-        trx_id = data.split("_")[-1]
-        content, kb = hist.get_detail_view(trx_id)
-        await query.edit_message_text(content, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
-
     elif data.startswith("confirm_delete_"):
         trx_id = data.split("_")[-1]
         text = f"⚠️ <b>XÁC NHẬN XÓA?</b>\n\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")],
-            [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]
+            [InlineKeyboardButton("❌ HỦY", callback_data=f"go_home")]
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
@@ -86,7 +79,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Lỗi: Không thể xóa.")
 
 # --- XỬ LÝ MESSAGE ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     await update.message.reply_text("🌟 <b>Hệ điều hành tài chính v2.0</b>", reply_markup=get_ceo_menu(), parse_mode=constants.ParseMode.HTML)
@@ -96,79 +88,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # 1. XỬ LÝ NÚT BẤM (EXACT MATCH)
-    if text == "📊 Chứng Khoán":
-        stock_mod = StockModule(user_id)
-        await update.message.reply_html(stock_mod.run(), reply_markup=get_stock_menu()); return
-    
-    if text == "🪙 Crypto":
-        crypto_mod = CryptoModule(user_id)
-        await update.message.reply_html(crypto_mod.run(), reply_markup=get_crypto_menu()); return
-
-    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
-        dash = DashboardModule(user_id)
-        await update.message.reply_html(dash.run(), reply_markup=get_ceo_menu()); return
-
-    if text == "📜 Lịch sử":
-        hist = HistoryModule(user_id)
-        content, kb = hist.run()
-        await update.message.reply_html(content, reply_markup=kb); return
-
-    if text in ["📈 Báo cáo nhóm", "📈 Báo cáo Crypto"]:
-        mod = CryptoModule(user_id) if "Crypto" in text else StockModule(user_id)
-        await update.message.reply_html(mod.get_group_report()); return
-
-    # FIX NÚT GIAO DỊCH & CẬP NHẬT GIÁ
-    if text in ["➕ Giao dịch", "➕ Giao dịch Crypto"]:
-        prefix = "S" if text == "➕ Giao dịch" else "C"
-        await update.message.reply_html(f"➕ <b>GIAO DỊCH {prefix}:</b>\n<code>{prefix} [Mã] [SL] [Giá]</code>"); return
-
-    if text in ["🔄 Cập nhật giá", "🔄 Cập nhật giá Crypto"]:
-        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b>\n<code>gia [Mã] [Giá mới]</code>"); return
-
-    if text in ["❌ Xóa mã", "❌ Xóa mã Crypto"]:
-        await update.message.reply_html("🗑 <b>XÓA MÃ:</b> Gõ <code>xoa [Mã]</code>"); return
-
-    # 2. XỬ LÝ LỆNH GÕ (PREFIX MATCH)
+    # --- ĐĂNG KÝ LỆNH /VIEW ĐỂ NÚT ✏️ PHẢN HỒI ---
     if text.startswith("/view_"):
         trx_id = text.split("_")[1]
         hist = HistoryModule(user_id)
         content, kb = hist.get_detail_view(trx_id)
-        await update.message.reply_html(content, reply_markup=kb); return
+        await update.message.reply_html(content, reply_markup=kb)
+        return
 
+    # --- NHÓM 1: ƯU TIÊN NÚT BẤM (EXACT MATCH) ---
+    if text == "📊 Chứng Khoán":
+        await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
+    if text == "🪙 Crypto":
+        await update.message.reply_html(CryptoModule(user_id).run(), reply_markup=get_crypto_menu()); return
+    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
+        await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu()); return
+    if text == "📜 Lịch sử":
+        content, kb = HistoryModule(user_id).run()
+        await update.message.reply_html(content, reply_markup=kb); return
+    if text in ["📈 Báo cáo nhóm", "📈 Báo cáo Crypto"]:
+        mod = CryptoModule(user_id) if "Crypto" in text else StockModule(user_id)
+        await update.message.reply_html(mod.get_group_report()); return
+    if text in ["➕ Giao dịch", "➕ Giao dịch Crypto"]:
+        p = "S" if text == "➕ Giao dịch" else "C"
+        await update.message.reply_html(f"➕ <b>GIAO DỊCH {p}:</b>\n<code>{p} [Mã] [SL] [Giá]</code>"); return
+    if text in ["🔄 Cập nhật giá", "🔄 Cập nhật giá Crypto"]:
+        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b>\n<code>gia [Mã] [Giá mới]</code>"); return
+    if text in ["❌ Xóa mã", "❌ Xóa mã Crypto"]:
+        await update.message.reply_html("🗑 <b>XÓA MÃ:</b> Gõ <code>xoa [Mã]</code>"); return
+    if text == "🔄 Làm mới":
+        await update.message.reply_html(f"🔄 <b>Làm mới:</b>\n\n{DashboardModule(user_id).run()}"); return
+
+    # --- NHÓM 2: LỆNH GÕ (PREFIX) & TÌM KIẾM ---
     if text.lower().startswith("xoa "):
-        ticker_del = text.split()[1].upper()
+        ticker = text.split()[1].upper()
         with db.get_connection() as conn:
-            conn.execute("DELETE FROM transactions WHERE ticker = ?", (ticker_del,))
-            conn.execute("DELETE FROM manual_prices WHERE ticker = ?", (ticker_del,))
-            conn.commit()
-        await update.message.reply_html(f"🗑 Đã xóa toàn bộ mã <b>{ticker_del}</b>."); return
+            conn.execute("DELETE FROM transactions WHERE ticker = ?", (ticker,))
+            conn.execute("DELETE FROM manual_prices WHERE ticker = ?", (ticker,))
+        await update.message.reply_html(f"🗑 Đã xóa mã <b>{ticker}</b>."); return
 
     if text.lower().startswith("gia "):
         match = re.match(r'^gia\s+([a-z0-9]+)\s+([\d\.,]+)$', text.lower().strip())
         if match:
-            ticker, price = match.group(1).upper(), float(match.group(2).replace(',', '.'))
+            t, p = match.group(1).upper(), float(match.group(2).replace(',', '.'))
             with db.get_connection() as conn:
-                conn.execute("INSERT INTO manual_prices (ticker, current_price, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(ticker) DO UPDATE SET current_price=excluded.current_price, updated_at=excluded.updated_at", (ticker, price))
-                conn.commit()
-            await update.message.reply_html(f"✅ Đã cập nhật giá <b>{ticker}</b>: <code>{price}</code>"); return
+                conn.execute("INSERT INTO manual_prices (ticker, current_price, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(ticker) DO UPDATE SET current_price=excluded.current_price, updated_at=excluded.updated_at", (t, p))
+            await update.message.reply_html(f"✅ Đã cập nhật <b>{t}</b>: <code>{p}</code>"); return
 
-    # 3. TÌM KIẾM NHANH (vd: vpb)
+    # TÌM KIẾM NHANH (vd: vpb)
     if len(text.split()) == 1 and text.isalpha() and text.lower() not in ["gia", "xoa", "nap", "rut"]:
-        hist = HistoryModule(user_id)
-        content, kb = hist.run(search_query=text)
+        content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
 
-    # 4. PARSER GIAO DỊCH
-    parsed_data = CommandParser.parse_transaction(text)
-    if parsed_data:
-        repo.save_transaction(user_id, parsed_data['ticker'], parsed_data['asset_type'], parsed_data['qty'], parsed_data['price'], parsed_data['total_val'], parsed_data['action'])
-        val_f = f"{parsed_data['total_val']:,.0f}".replace(',', '.')
-        await update.message.reply_html(f"✅ <b>Ghi nhận:</b> <code>{text.upper()}</code>\n💰 Giá trị: <b>{val_f}đ</b>"); return
+    # PARSER GIAO DỊCH
+    parsed = CommandParser.parse_transaction(text)
+    if parsed:
+        repo.save_transaction(user_id, parsed['ticker'], parsed['asset_type'], parsed['qty'], parsed['price'], parsed['total_val'], parsed['action'])
+        await update.message.reply_html(f"✅ <b>Ghi nhận:</b> <code>{text.upper()}</code>\n💰: <b>{parsed['total_val']:,.0f}đ</b>"); return
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    print("🚀 Bot Finance v2.0 - Fixed & Ready."); application.run_polling(drop_pending_updates=True)
+    print("🚀 Bot Finance v2.0 - System Online."); application.run_polling(drop_pending_updates=True)
