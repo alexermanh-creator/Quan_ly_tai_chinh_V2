@@ -1,4 +1,3 @@
-# backend/core/parser.py
 import re
 from backend.core.registry import AssetResolver
 
@@ -14,30 +13,23 @@ class CommandParser:
                 action_raw = cash_match.group(1)
                 amount_str = cash_match.group(2).replace(',', '.')
                 unit = cash_match.group(3)
-                
                 amount = float(amount_str)
                 if unit == 'ty': amount *= 1_000_000_000
                 elif unit in ['tr', 'trieu', 'triệu']: amount *= 1_000_000
                 
                 return {
-                    'ticker': 'CASH',
-                    'action': 'IN' if action_raw == 'nap' else 'OUT',
-                    'qty': 1.0,
-                    'price': amount,
-                    'total_val': amount,
-                    'asset_type': 'CASH'
+                    'ticker': 'CASH', 'action': 'IN' if action_raw == 'nap' else 'OUT',
+                    'qty': 1.0, 'price': amount, 'total_val': amount, 'asset_type': 'CASH'
                 }
 
-            # --- 2. XỬ LÝ GIAO DỊCH TÀI SẢN (STOCK, CRYPTO) ---
+            # --- 2. XỬ LÝ GIAO DỊCH TÀI SẢN (TỰ ĐỘNG NHẬN DIỆN) ---
             parts = raw_text.split()
             if len(parts) < 2: return None
             
-            # Tự động xử lý nếu thiếu chữ S/C ở đầu (Nếu ticker 3 chữ cái => STOCK)
+            # AssetResolver thông minh: s = Stock, c = Crypto
             if parts[0] not in ['s', 'c']:
-                if len(parts[0]) == 3 and parts[0].isalpha():
-                    input_resolver = f"s {parts[0]}" # Tự hiểu là STOCK
-                else:
-                    input_resolver = parts[0]
+                # Nếu chỉ gõ Ticker 3 chữ cái -> Mặc định Stock
+                input_resolver = f"s {parts[0]}" if len(parts[0]) == 3 and parts[0].isalpha() else parts[0]
                 val_1 = parts[1]
                 val_2 = parts[2] if len(parts) > 2 else None
             else:
@@ -47,10 +39,9 @@ class CommandParser:
 
             asset_type, ticker = AssetResolver.resolve(input_resolver)
 
-            # Xử lý Cổ tức
+            # Phân loại lệnh đặc biệt (Cổ tức)
             if val_2 == 'cash':
                 return {'ticker': ticker, 'action': 'CASH_DIVIDEND', 'qty': 0, 'price': 0, 'total_val': abs(float(val_1)), 'asset_type': asset_type}
-            
             if val_2 == 'div':
                 return {'ticker': ticker, 'action': 'DIVIDEND_STOCK', 'qty': abs(float(val_1)), 'price': 0, 'total_val': 0, 'asset_type': asset_type}
 
@@ -58,18 +49,14 @@ class CommandParser:
             qty = float(val_1)
             price = float(val_2) if val_2 else 0
             
-            # QUAN TRỌNG: Multiplier cho Stock là 1000 (Ví dụ: giá 100 = 100.000đ)
+            # Multiplier: Stock x1000, Crypto/Khác x1
             multiplier = 1000 if asset_type == 'STOCK' else 1
             total_val = abs(qty) * price * multiplier
 
             return {
                 'ticker': ticker, 
                 'action': 'BUY' if qty > 0 else 'SELL',
-                'qty': abs(qty), 
-                'price': price, 
-                'total_val': total_val,
-                'asset_type': asset_type
+                'qty': abs(qty), 'price': price, 
+                'total_val': total_val, 'asset_type': asset_type
             }
-
-        except Exception:
-            return None
+        except Exception: return None
