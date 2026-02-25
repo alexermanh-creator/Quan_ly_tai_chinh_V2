@@ -10,6 +10,7 @@ from backend.database.repository import Repository
 from backend.database.db_manager import db
 from backend.modules.dashboard import DashboardModule
 from backend.modules.stock import StockModule
+from backend.modules.crypto import CryptoModule # 1. Thêm Import mới
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -37,6 +38,13 @@ def get_stock_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
+def get_crypto_menu():
+    """2. Menu chuyên biệt khi vào mục Crypto"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("➕ Giao dịch Crypto"), KeyboardButton("📈 Báo cáo Crypto")],
+        [KeyboardButton("🏠 Trang chủ")]
+    ], resize_keyboard=True)
+
 # --- XỬ LÝ MESSAGE ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -58,36 +66,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             stock_mod = StockModule(user_id)
             await update.message.reply_html(stock_mod.run(), reply_markup=get_stock_menu())
+            context.user_data['last_module'] = 'STOCK' # Đánh dấu để biết báo cáo nhóm nào
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi Stock Module: {e}")
+        return
+
+    if text == "🪙 Crypto": # 3. Xử lý nút Crypto
+        try:
+            crypto_mod = CryptoModule(user_id)
+            await update.message.reply_html(crypto_mod.run(), reply_markup=get_crypto_menu())
+            context.user_data['last_module'] = 'CRYPTO'
+        except Exception as e:
+            await update.message.reply_text(f"❌ Lỗi Crypto Module: {e}")
         return
 
     if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
         try:
             dash = DashboardModule(user_id)
             await update.message.reply_html(dash.run(), reply_markup=get_ceo_menu())
+            context.user_data['last_module'] = None
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi Dashboard: {e}")
         return
 
-    if text == "📈 Báo cáo nhóm":
+    if text in ["📈 Báo cáo nhóm", "📈 Báo cáo Crypto"]: # 4. Hỗ trợ cả 2 loại báo cáo
         try:
-            stock_mod = StockModule(user_id)
-            await update.message.reply_html(stock_mod.get_group_report())
+            current_mod = context.user_data.get('last_module')
+            if current_mod == 'CRYPTO':
+                mod = CryptoModule(user_id)
+            else:
+                mod = StockModule(user_id)
+            await update.message.reply_html(mod.get_group_report())
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi Báo cáo: {e}")
         return
 
     if text == "➕ Giao dịch":
-        await update.message.reply_html("➕ <b>GIAO DỊCH:</b> Hãy gõ theo cú pháp:\n<code>S [Mã] [Số lượng] [Giá]</code>\nVí dụ: <code>S HPG 1000 28.5</code>")
+        await update.message.reply_html("➕ <b>GIAO DỊCH STOCK:</b>\n<code>S [Mã] [SL] [Giá]</code>\nVí dụ: <code>S HPG 1000 28.5</code>")
+        return
+
+    if text == "➕ Giao dịch Crypto": # 5. Hướng dẫn lệnh Crypto
+        await update.message.reply_html("🪙 <b>GIAO DỊCH CRYPTO:</b>\n<code>C [Mã] [SL] [Giá USD]</code>\nVí dụ: <code>C BTC 0.1 65000</code>")
         return
     
     if text == "🔄 Cập nhật giá":
-        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b> Hãy gõ theo cú pháp:\n<code>gia [Mã] [Giá mới]</code>\nVí dụ: <code>gia VPB 30.2</code>")
-        return
-
-    if text == "❌ Xóa mã":
-        await update.message.reply_html("🗑 <b>XÓA MÃ:</b> Gõ <code>xoa [Mã]</code> để xóa sạch lịch sử.\nVí dụ: <code>xoa VNM</code>")
+        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b>\n<code>gia [Mã] [Giá mới]</code>")
         return
 
     if text == "🔄 Làm mới":
@@ -100,21 +123,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- NHÓM 2: XỬ LÝ LỆNH GÕ (PREFIX MATCH) ---
 
-    # Lệnh xóa mã thực tế
     if text.lower().startswith("xoa "):
         parts = text.split()
         if len(parts) == 2:
             ticker_del = parts[1].upper()
             with db.get_connection() as conn:
-                conn.execute("DELETE FROM transactions WHERE ticker = ? AND asset_type = 'STOCK'", (ticker_del,))
+                conn.execute("DELETE FROM transactions WHERE ticker = ?", (ticker_del,))
                 conn.execute("DELETE FROM manual_prices WHERE ticker = ?", (ticker_del,))
                 conn.commit()
             await update.message.reply_html(f"🗑 Đã xóa toàn bộ dữ liệu mã <b>{ticker_del}</b>.")
-            stock_mod = StockModule(user_id)
-            await update.message.reply_html(stock_mod.run())
         return
 
-    # Lệnh cập nhật giá thực tế
     if text.lower().startswith("gia "):
         match = re.match(r'^gia\s+([a-z0-9]+)\s+([\d\.,]+)$', text.lower().strip())
         if match:
@@ -145,16 +164,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total_value=parsed_data['total_val'],
                 type=parsed_data['action']
             )
+            # Format hiển thị giá trị VNĐ cho CEO dễ nhìn
             val_format = f"{parsed_data['total_val']:,.0f}".replace(',', '.')
             await update.message.reply_html(
                 f"✅ <b>Ghi nhận thành công:</b>\n"
                 f"📝 Lệnh: <code>{text.upper()}</code>\n"
-                f"💰 Giá trị: <b>{val_format}đ</b>"
+                f"💰 Giá trị (VNĐ): <b>{val_format}đ</b>"
             )
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi Database: {e}")
     else:
-        # Nếu gõ nhiều từ mà không khớp lệnh nào
         if len(text.split()) > 1:
             await update.message.reply_text("❓ Lệnh không hợp lệ. Hãy kiểm tra lại cú pháp.")
 
