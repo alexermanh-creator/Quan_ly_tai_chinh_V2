@@ -88,6 +88,7 @@ class DashboardModule(BaseModule):
             f"📊 Cổ phiếu: {self.format_currency(stock_mkt_val)}", # Đã sửa đồng bộ
             f"🪙 Crypto: {self.format_currency(crypto_vnd)}",
             "",
-            "🏠 <i>Dữ liệu đã đồng bộ với giá thị trường mới nhất.</i>"
+            "🏠 <i>Quay Về Trang Chủ.</i>"
         ]
         return "\n".join(lines)
+
