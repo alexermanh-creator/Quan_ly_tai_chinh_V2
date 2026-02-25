@@ -18,7 +18,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
-# --- HỆ THỐNG MENU (GIỮ NGUYÊN 100% GỐC) ---
+# --- HỆ THỐNG MENU (GIỮ NGUYÊN 100% GỐC CỦA CEO) ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -58,9 +58,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, kb = hist.run(page=page, asset_type=a_type)
         await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
+    # ĐÃ SỬA LỖI: Xử lý nút Tìm kiếm 🔍
+    elif data == "hist_search_prompt":
+        await query.message.reply_html("🔍 <b>TÌM KIẾM LỊCH SỬ</b>\nCEO hãy gõ mã tài sản cần tìm (VD: <code>VPB</code>, <code>BTC</code>)...")
+
     elif data == "go_home":
         dash = DashboardModule(user_id)
         await query.message.reply_html(dash.run(), reply_markup=get_ceo_menu())
+
+    elif data.startswith("view_"):
+        trx_id = data.split("_")[-1]
+        content, kb = hist.get_detail_view(trx_id)
+        await query.edit_message_text(content, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
     elif data.startswith("confirm_delete_"):
         trx_id = data.split("_")[-1]
@@ -88,7 +97,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # --- ĐĂNG KÝ LỆNH /VIEW ĐỂ NÚT ✏️ PHẢN HỒI ---
+    # Đăng ký lệnh /view để đề phòng CEO vẫn gõ lệnh cũ
     if text.startswith("/view_"):
         trx_id = text.split("_")[1]
         hist = HistoryModule(user_id)
@@ -135,7 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.execute("INSERT INTO manual_prices (ticker, current_price, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(ticker) DO UPDATE SET current_price=excluded.current_price, updated_at=excluded.updated_at", (t, p))
             await update.message.reply_html(f"✅ Đã cập nhật <b>{t}</b>: <code>{p}</code>"); return
 
-    # TÌM KIẾM NHANH (vd: vpb)
+    # TÌM KIẾM NHANH (vd: gõ vpb)
     if len(text.split()) == 1 and text.isalpha() and text.lower() not in ["gia", "xoa", "nap", "rut"]:
         content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
