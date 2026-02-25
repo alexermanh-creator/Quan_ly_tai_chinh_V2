@@ -18,7 +18,6 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
-# --- HỆ THỐNG MENU ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -43,7 +42,6 @@ def get_crypto_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
-# --- XỬ LÝ CALLBACK ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -62,39 +60,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_html("🔍 <b>TÌM KIẾM LỊCH SỬ</b>\nCEO hãy gõ mã tài sản cần tìm (VD: <code>VPB</code>, <code>BTC</code>)...")
 
     elif data == "go_home":
-        dash = DashboardModule(user_id)
-        await query.message.reply_html(dash.run(), reply_markup=get_ceo_menu())
+        # Xóa trạng thái Edit nếu có
+        if 'edit_trx' in context.user_data: del context.user_data['edit_trx']
+        await query.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
 
     elif data.startswith("view_"):
+        if 'edit_trx' in context.user_data: del context.user_data['edit_trx']
         trx_id = data.split("_")[-1]
         content, kb = hist.get_detail_view(trx_id)
         await query.edit_message_text(content, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
+    # --- CHỨC NĂNG SỬA: ĐƯA BOT VÀO TRẠNG THÁI CHỜ ---
+    elif data.startswith("edit_"):
+        parts = data.split("_")
+        field, trx_id = parts[1], parts[-1] # field: qty, price, date
+        context.user_data['edit_trx'] = {'id': trx_id, 'field': field}
+        
+        prompts = {
+            'qty': "🔢 Vui lòng nhập <b>SỐ LƯỢNG</b> mới:",
+            'price': "💲 Vui lòng nhập <b>GIÁ</b> mới:",
+            'date': "📅 Vui lòng nhập <b>NGÀY</b> mới (Định dạng: YYYY-MM-DD):"
+        }
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Hủy thao tác", callback_data=f"view_{trx_id}")]])
+        await query.message.reply_html(f"✏️ <b>Đang sửa giao dịch #{trx_id}</b>\n{prompts[field]}", reply_markup=kb)
+
     elif data.startswith("confirm_delete_"):
         trx_id = data.split("_")[-1]
-        text = f"⚠️ <b>XÁC NHẬN XÓA?</b>\n\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?"
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")],
-            [InlineKeyboardButton("❌ HỦY", callback_data=f"go_home")]
-        ])
-        await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")], [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]])
+        await query.edit_message_text(f"⚠️ <b>XÁC NHẬN XÓA?</b>\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?", reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
     elif data.startswith("execute_delete_"):
         trx_id = data.split("_")[-1]
-        if repo.delete_transaction(trx_id):
-            await query.edit_message_text(f"✅ Đã xóa thành công giao dịch #{trx_id}!")
-        else:
-            await query.edit_message_text("❌ Lỗi: Không thể xóa.")
+        if repo.delete_transaction(trx_id): await query.edit_message_text(f"✅ Đã xóa thành công giao dịch #{trx_id}!")
+        else: await query.edit_message_text("❌ Lỗi: Không thể xóa.")
 
-# --- BỘ PHẬN MỚI CHUYÊN XỬ LÝ CLICK VÀO /1, /2 ---
 async def handle_transaction_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    trx_id = update.message.text[1:] # Loại bỏ dấu / để lấy số ID
-    hist = HistoryModule(update.effective_user.id)
-    content, kb = hist.get_detail_view(trx_id)
+    # Khi bấm /1, xóa các lệnh chờ sửa trước đó
+    if 'edit_trx' in context.user_data: del context.user_data['edit_trx']
+    trx_id = update.message.text[1:]
+    content, kb = HistoryModule(update.effective_user.id).get_detail_view(trx_id)
     await update.message.reply_html(content, reply_markup=kb)
 
-# --- XỬ LÝ MESSAGE ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     await update.message.reply_text("🌟 <b>Hệ điều hành tài chính v2.0</b>", reply_markup=get_ceo_menu(), parse_mode=constants.ParseMode.HTML)
@@ -104,13 +111,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # --- NHÓM 1: ƯU TIÊN NÚT BẤM (EXACT MATCH) ---
-    if text == "📊 Chứng Khoán":
-        await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
-    if text == "🪙 Crypto":
-        await update.message.reply_html(CryptoModule(user_id).run(), reply_markup=get_crypto_menu()); return
-    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
-        await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu()); return
+    # --- KIỂM TRA TRẠNG THÁI "ĐANG SỬA GIAO DỊCH" TỪ BOT ---
+    if 'edit_trx' in context.user_data:
+        edit_data = context.user_data['edit_trx']
+        trx_id, field = edit_data['id'], edit_data['field']
+        trx = repo.get_transaction_by_id(trx_id)
+        
+        if not trx:
+            del context.user_data['edit_trx']
+            await update.message.reply_text("❌ Giao dịch không tồn tại."); return
+
+        try:
+            # Thuật toán tính toán lại hệ số nhân tự động
+            rate_factor = 1
+            if trx['qty'] > 0 and trx['price'] > 0:
+                rate_factor = trx['total_value'] / (trx['qty'] * trx['price'])
+                
+            new_qty, new_price, new_date = trx['qty'], trx['price'], trx['date']
+            
+            if field == 'qty':
+                new_qty = float(text.replace(',', '.'))
+            elif field == 'price':
+                new_price = float(text.replace(',', '.'))
+            elif field == 'date':
+                if not re.match(r'^\d{4}-\d{2}-\d{2}$', text.strip()):
+                    await update.message.reply_text("❌ Sai định dạng! Hãy nhập: YYYY-MM-DD"); return
+                time_part = trx['date'].split()[1] if len(trx['date'].split()) > 1 else "00:00:00"
+                new_date = f"{text.strip()} {time_part}"
+
+            new_total = abs(new_qty) * new_price * rate_factor
+            repo.update_transaction(trx_id, new_qty, new_price, new_total, new_date)
+            del context.user_data['edit_trx']
+            
+            content, kb = HistoryModule(user_id).get_detail_view(trx_id)
+            await update.message.reply_html(f"✅ <b>ĐÃ CẬP NHẬT THÀNH CÔNG!</b>\n\n{content}", reply_markup=kb)
+        except ValueError:
+            await update.message.reply_text("❌ Vui lòng nhập số hợp lệ.")
+        return
+
+    # --- NHÓM 1: EXACT MATCH ---
+    if text == "📊 Chứng Khoán": await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
+    if text == "🪙 Crypto": await update.message.reply_html(CryptoModule(user_id).run(), reply_markup=get_crypto_menu()); return
+    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]: await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu()); return
     if text == "📜 Lịch sử":
         content, kb = HistoryModule(user_id).run()
         await update.message.reply_html(content, reply_markup=kb); return
@@ -127,7 +169,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔄 Làm mới":
         await update.message.reply_html(f"🔄 <b>Làm mới:</b>\n\n{DashboardModule(user_id).run()}"); return
 
-    # --- NHÓM 2: LỆNH GÕ (PREFIX) & TÌM KIẾM ---
+    # --- NHÓM 2: PREFIX & TÌM KIẾM ---
     if text.lower().startswith("xoa "):
         ticker = text.split()[1].upper()
         with db.get_connection() as conn:
@@ -147,31 +189,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
 
-    # --- NHÓM 3: PARSER GIAO DỊCH VÀ CHỐT CHẶN TIỀN ---
+    # --- NHÓM 3: GIAO DỊCH CHỐT CHẶN ---
     parsed = CommandParser.parse_transaction(text)
     if parsed:
         if parsed['action'] in ['BUY', 'OUT', 'WITHDRAW']:
             current_cash = repo.get_available_cash(user_id)
             if parsed['total_val'] > current_cash:
-                await update.message.reply_html("<b>Hết tiền rồi chủ tịch ơi!!!</b>")
-                return
-
+                await update.message.reply_html("<b>Hết tiền rồi chủ tịch ơi!!!</b>"); return
         repo.save_transaction(user_id, parsed['ticker'], parsed['asset_type'], parsed['qty'], parsed['price'], parsed['total_val'], parsed['action'])
         await update.message.reply_html(f"✅ <b>Ghi nhận:</b> <code>{text.upper()}</code>\n💰: <b>{parsed['total_val']:,.0f}đ</b>"); return
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
-    
-    # Đăng ký lệnh /start
     application.add_handler(CommandHandler('start', start))
-    
-    # 💥 BỘ LỌC ĐẶC NHIỆM: Bắt ngay lập tức mọi tin nhắn dạng /1, /2, /100...
     application.add_handler(MessageHandler(filters.Regex(r'^/\d+$'), handle_transaction_click))
-    
-    # Đăng ký Callback (Nút bấm dưới tin nhắn)
     application.add_handler(CallbackQueryHandler(handle_callback))
-    
-    # Đăng ký xử lý text thường (đã bị loại trừ các lệnh bắt đầu bằng / )
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    
     print("🚀 Bot Finance v2.0 - System Online."); application.run_polling(drop_pending_updates=True)
