@@ -5,52 +5,53 @@ class CommandParser:
     @staticmethod
     def parse_transaction(text):
         """
-        Cú pháp tối giản: [Prefix] [Ticker] [Qty] [Price]
-        Ví dụ: 
-        S VPB 100 22.5  -> Mua 100 VPB giá 22.5
-        S VPB -50 23.0  -> Bán 50 VPB giá 23.0
-        C BTC 0.01 95000 -> Mua 0.01 BTC giá 95000
+        Cú pháp tối giản & Nâng cấp CTO:
+        1. Mua/Bán: [Prefix] [Ticker] [Qty] [Price] -> S VPB 100 22.5
+        2. Cổ tức cổ phiếu: [Prefix] [Ticker] [Qty] div -> S VPB 100 div
+        3. Cổ tức tiền: [Prefix] [Ticker] [Amount] cash -> S VPB 2000000 cash
         """
         try:
-            parts = text.strip().split()
+            parts = text.lower().strip().split()
+            if len(parts) < 3: return None
             
-            # Kiểm tra tối thiểu phải có 3 phần (Nếu ko dùng prefix) hoặc 4 phần (Có prefix)
-            if len(parts) < 3:
-                return None
-            
-            # 1. Xác định Tiền tố và Ticker
-            first_part = parts[0].upper()
-            if first_part in ['S', 'C']:
-                # Có tiền tố: S VPB 100 50
-                prefix_and_ticker = f"{parts[0]} {parts[1]}"
-                qty_idx = 2
-                price_idx = 3
+            # 1. Xử lý Prefix và Ticker
+            if parts[0] in ['s', 'c']:
+                input_resolver = f"{parts[0]} {parts[1]}"
+                val_1 = parts[2]
+                val_2 = parts[3] if len(parts) > 3 else None
             else:
-                # Không tiền tố: VPB 100 50
-                prefix_and_ticker = parts[0]
-                qty_idx = 1
-                price_idx = 2
+                input_resolver = parts[0]
+                val_1 = parts[1]
+                val_2 = parts[2] if len(parts) > 2 else None
 
-            # Gọi Resolver để lấy loại tài sản và mã sạch
-            asset_type, ticker = AssetResolver.resolve(prefix_and_ticker)
+            asset_type, ticker = AssetResolver.resolve(input_resolver)
+
+            # 2. Nhận diện loại lệnh đặc biệt
+            # Cổ tức tiền: S VPB 2000000 cash
+            if val_2 == 'cash':
+                return {
+                    'ticker': ticker, 'action': 'CASH_DIVIDEND',
+                    'qty': 0, 'price': 0, 'total_val': abs(float(val_1)),
+                    'asset_type': asset_type
+                }
             
-            # 2. Lấy Số lượng và Giá
-            qty = float(parts[qty_idx])
-            price = float(parts[price_idx])
-            
-            # 3. Định nghĩa hành động dựa trên dấu của Số lượng
-            # Dương là BUY, Âm là SELL
+            # Cổ tức cổ phiếu: S VPB 100 div
+            if val_2 == 'div':
+                return {
+                    'ticker': ticker, 'action': 'DIVIDEND_STOCK',
+                    'qty': abs(float(val_1)), 'price': 0, 'total_val': 0,
+                    'asset_type': asset_type
+                }
+
+            # 3. Lệnh Mua/Bán thông thường (S VPB 100 22.5)
+            qty = float(val_1)
+            price = float(val_2)
             action = 'BUY' if qty > 0 else 'SELL'
             
-            # Luôn lưu số lượng vào DB là số dương để Engine tính toán thống nhất
-            final_qty = abs(qty)
-            
             return {
-                'ticker': ticker,
-                'action': action,
-                'qty': final_qty,
-                'price': price,
-                'total_val': final_qty * price,
+                'ticker': ticker, 'action': action,
+                'qty': abs(qty), 'price': price, 
+                'total_val': abs(qty) * price,
                 'asset_type': asset_type
             }
         except Exception:
@@ -58,9 +59,5 @@ class CommandParser:
 
     @staticmethod
     def is_transaction_command(text):
-        """
-        Kiểm tra xem tin nhắn có phải lệnh giao dịch không.
-        Cấu trúc: Có ít nhất 2 khoảng trắng (tương đương 3 phần dữ liệu)
-        """
         parts = text.strip().split()
-        return len(parts) >= 3 and any(char.isdigit() for char in text)
+        return len(parts) >= 3
