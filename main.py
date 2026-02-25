@@ -75,7 +75,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"⚠️ <b>XÁC NHẬN XÓA?</b>\n\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")],
-            [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]
+            [InlineKeyboardButton("❌ HỦY", callback_data=f"go_home")]
         ])
         await query.edit_message_text(text, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
@@ -96,7 +96,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # ĐÃ NÂNG CẤP: Bấm vào ✏️ /1 sẽ gọi thẳng đến hàm này
     if re.match(r'^/\d+$', text):
         trx_id = text[1:]
         hist = HistoryModule(user_id)
@@ -147,8 +146,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
 
+    # --- NHÓM 3: PARSER GIAO DỊCH VÀ CHỐT CHẶN TIỀN ---
     parsed = CommandParser.parse_transaction(text)
     if parsed:
+        # Nếu là hành động tốn tiền (Mua tài sản hoặc Rút tiền)
+        if parsed['action'] in ['BUY', 'OUT', 'WITHDRAW']:
+            current_cash = repo.get_available_cash(user_id)
+            if parsed['total_val'] > current_cash:
+                await update.message.reply_html("<b>Hết tiền rồi chủ tịch ơi!!!</b>")
+                return
+
+        # Vượt qua chốt chặn -> Lưu giao dịch
         repo.save_transaction(user_id, parsed['ticker'], parsed['asset_type'], parsed['qty'], parsed['price'], parsed['total_val'], parsed['action'])
         await update.message.reply_html(f"✅ <b>Ghi nhận:</b> <code>{text.upper()}</code>\n💰: <b>{parsed['total_val']:,.0f}đ</b>"); return
 
