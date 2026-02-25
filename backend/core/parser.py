@@ -8,20 +8,16 @@ class CommandParser:
         try:
             raw_text = text.lower().strip()
             
-            # --- 1. XỬ LÝ LỆNH NẠP/RÚT TIỀN TỶ ---
-            # Regex hỗ trợ cả viết liền và viết cách: nap 10ty, nap10ty, nap 10 ty
+            # --- 1. XỬ LÝ LỆNH NẠP/RÚT TIỀN (CASH) ---
             cash_match = re.match(r'^(nap|rut)\s*([\d\.,]+)\s*(ty|tr|trieu|triệu)?$', raw_text)
-            
             if cash_match:
                 action_raw = cash_match.group(1)
                 amount_str = cash_match.group(2).replace(',', '.')
                 unit = cash_match.group(3)
                 
                 amount = float(amount_str)
-                if unit == 'ty': 
-                    amount *= 1_000_000_000
-                elif unit in ['tr', 'trieu', 'triệu']: 
-                    amount *= 1_000_000
+                if unit == 'ty': amount *= 1_000_000_000
+                elif unit in ['tr', 'trieu', 'triệu']: amount *= 1_000_000
                 
                 return {
                     'ticker': 'CASH',
@@ -32,38 +28,46 @@ class CommandParser:
                     'asset_type': 'CASH'
                 }
 
-            # --- 2. XỬ LÝ LỆNH GIAO DỊCH TÀI SẢN (S HPG 1000 25) ---
+            # --- 2. XỬ LÝ GIAO DỊCH TÀI SẢN (STOCK, CRYPTO) ---
             parts = raw_text.split()
-            if len(parts) < 3: return None
+            if len(parts) < 2: return None
             
-            if parts[0] in ['s', 'c']:
+            # Tự động xử lý nếu thiếu chữ S/C ở đầu (Nếu ticker 3 chữ cái => STOCK)
+            if parts[0] not in ['s', 'c']:
+                if len(parts[0]) == 3 and parts[0].isalpha():
+                    input_resolver = f"s {parts[0]}" # Tự hiểu là STOCK
+                else:
+                    input_resolver = parts[0]
+                val_1 = parts[1]
+                val_2 = parts[2] if len(parts) > 2 else None
+            else:
                 input_resolver = f"{parts[0]} {parts[1]}"
                 val_1 = parts[2]
                 val_2 = parts[3] if len(parts) > 3 else None
-            else:
-                input_resolver = parts[0]
-                val_1 = parts[1]
-                val_2 = parts[2] if len(parts) > 2 else None
 
             asset_type, ticker = AssetResolver.resolve(input_resolver)
 
-            # Phân loại lệnh
+            # Xử lý Cổ tức
             if val_2 == 'cash':
                 return {'ticker': ticker, 'action': 'CASH_DIVIDEND', 'qty': 0, 'price': 0, 'total_val': abs(float(val_1)), 'asset_type': asset_type}
             
             if val_2 == 'div':
                 return {'ticker': ticker, 'action': 'DIVIDEND_STOCK', 'qty': abs(float(val_1)), 'price': 0, 'total_val': 0, 'asset_type': asset_type}
 
+            # Xử lý Mua/Bán
             qty = float(val_1)
             price = float(val_2) if val_2 else 0
-            multiplier = 1000 if asset_type == 'STOCK' else 1
             
+            # QUAN TRỌNG: Multiplier cho Stock là 1000 (Ví dụ: giá 100 = 100.000đ)
+            multiplier = 1000 if asset_type == 'STOCK' else 1
+            total_val = abs(qty) * price * multiplier
+
             return {
                 'ticker': ticker, 
                 'action': 'BUY' if qty > 0 else 'SELL',
                 'qty': abs(qty), 
                 'price': price, 
-                'total_val': abs(qty) * price * multiplier,
+                'total_val': total_val,
                 'asset_type': asset_type
             }
 
