@@ -16,28 +16,48 @@ class HistoryModule(BaseModule):
             return f"{value / 10**6:,.1f} triệu"
         return f"{value:,.0f}đ"
 
+    def get_stats(self, asset_type=None):
+        """📊 Tính toán thống kê nhanh cho History"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT type, SUM(total_value) as total FROM transactions WHERE user_id = ?"
+            params = [self.user_id]
+            if asset_type:
+                query += " AND asset_type = ?"
+                params.append(asset_type)
+            query += " GROUP BY type"
+            cursor.execute(query, params)
+            results = {row['type']: row['total'] for row in cursor.fetchall()}
+            
+        deposit = results.get('DEPOSIT', 0) + results.get('IN', 0)
+        withdraw = results.get('WITHDRAW', 0) + results.get('OUT', 0)
+        return deposit, withdraw
+
     def run(self, page=0, asset_type=None, search_query=None):
-        """📜 HIỂN THỊ DANH SÁCH GIAO DỊCH"""
+        """📜 GIAO DIỆN LỊCH SỬ CHUẨN SPEC"""
         offset = page * self.items_per_page
         transactions = self.repo.get_latest_transactions(
-            user_id=self.user_id,
-            limit=self.items_per_page,
-            offset=offset,
-            asset_type=asset_type,
-            search_query=search_query
+            user_id=self.user_id, limit=self.items_per_page,
+            offset=offset, asset_type=asset_type, search_query=search_query
         )
 
-        if not transactions and page == 0:
-            return "📜 <b>LỊCH SỬ GIAO DỊCH</b>\n\nChưa có dữ liệu giao dịch nào.", None
-
-        # --- 1. Header & Thống kê nhanh ---
+        # Lấy thống kê
+        dep, wit = self.get_stats(asset_type)
+        
         title = "📜 <b>LỊCH SỬ GIAO DỊCH</b>"
         if asset_type: title = f"📜 <b>LỊCH SỬ: {asset_type}</b>"
         if search_query: title = f"🔍 <b>TÌM KIẾM: {search_query.upper()}</b>"
 
-        lines = [title, "━━━━━━━━━━━━━━━━━━━"]
+        lines = [
+            title,
+            f"📊 Tổng nạp: <b>{self.format_currency(dep)}</b>",
+            f"📊 Tổng rút: <b>{self.format_currency(wit)}</b>",
+            "━━━━━━━━━━━━━━━━━━━"
+        ]
         
-        # --- 2. Danh sách giao dịch ---
+        if not transactions:
+            lines.append("<i>Chưa có dữ liệu giao dịch.</i>")
+        
         current_date = ""
         for trx in transactions:
             date_str = trx['date'].split()[0]
@@ -46,63 +66,56 @@ class HistoryModule(BaseModule):
                 current_date = date_str
             
             icon = "🟢" if trx['type'] in ['BUY', 'IN', 'DEPOSIT'] else "🔴"
-            val_str = self.format_currency(trx['total_value'])
-            
-            # Deep Link: Khi bấm vào ID sẽ gọi hàm xem chi tiết
+            # Thay /view_ID bằng biểu tượng ✏️ (Deep link)
             line = (
                 f"{icon} <b>{trx['type']} — {trx['ticker']}</b>\n"
-                f"SL: {trx['qty']} | Giá: {trx['price']:,.2f}\n"
-                f"Tổng: <b>{val_str}</b> | Sửa: /view_{trx['id']}\n"
+                f"SL: {trx['qty']} | Giá: {trx['price']:,.0f}\n"
+                f"Tổng: <b>{self.format_currency(trx['total_value'])}</b> ✏️ /view_{trx['id']}\n"
                 f"────────────"
             )
             lines.append(line)
 
-        # --- 3. Điều hướng Phân trang (Inline Buttons) ---
+        # KEYBOARD
         keyboard = []
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Trước", callback_data=f"hist_page_{page-1}_{asset_type or 'ALL'}"))
-        
-        nav_buttons.append(InlineKeyboardButton(f"Trang {page + 1}", callback_data="none"))
-        
+        # Điều hướng
+        nav = []
+        if page > 0: nav.append(InlineKeyboardButton("⬅️ Trước", callback_data=f"hist_page_{page-1}_{asset_type or 'ALL'}"))
+        nav.append(InlineKeyboardButton(f"Trang {page + 1}", callback_data="none"))
         if len(transactions) >= self.items_per_page:
-            nav_buttons.append(InlineKeyboardButton("Sau ➡️", callback_data=f"hist_page_{page+1}_{asset_type or 'ALL'}"))
-        
-        keyboard.append(nav_buttons)
-        
-        # Nút lọc nhanh
+            nav.append(InlineKeyboardButton("Sau ➡️", callback_data=f"hist_page_{page+1}_{asset_type or 'ALL'}"))
+        if nav: keyboard.append(nav)
+
+        # Nút chức năng
         keyboard.append([
             InlineKeyboardButton("📊 Stock", callback_data="hist_filter_STOCK"),
-            InlineKeyboardButton("🪙 Crypto", callback_data="hist_filter_CRYPTO"),
-            InlineKeyboardButton("💵 Tiền", callback_data="hist_filter_CASH")
+            InlineKeyboardButton("🪙 Crypto", callback_data="hist_filter_CRYPTO")
         ])
-        keyboard.append([InlineKeyboardButton("🏠 Home", callback_data="go_home")])
+        keyboard.append([
+            InlineKeyboardButton("🔍 Tìm kiếm", callback_data="hist_search_prompt"),
+            InlineKeyboardButton("🏠 Home", callback_data="go_home")
+        ])
 
         return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
     def get_detail_view(self, trx_id):
-        """📄 CHI TIẾT GIAO DỊCH ĐỂ XÁC NHẬN XÓA/SỬA"""
+        """📄 CHI TIẾT KHI CLICK VÀO ✏️"""
         trx = self.repo.get_transaction_by_id(trx_id)
-        if not trx: return "❌ Không tìm thấy giao dịch này.", None
+        if not trx: return "❌ Không tìm thấy giao dịch.", None
 
         text = (
             f"📄 <b>CHI TIẾT GIAO DỊCH #{trx['id']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🔸 Mã: <b>{trx['ticker']}</b> ({trx['asset_type']})\n"
-            f"🔸 Loại: <b>{trx['type']}</b>\n"
-            f"🔸 Số lượng: {trx['qty']}\n"
-            f"🔸 Giá: {trx['price']:,.2f}\n"
-            f"🔸 Tổng: <b>{self.format_currency(trx['total_value'])}</b>\n"
+            f"🔹 Loại: {trx['type']} | Mã: {trx['ticker']}\n"
+            f"🔹 SL: {trx['qty']} | Giá: {trx['price']:,.0f}\n"
+            f"💰 Tổng: <b>{self.format_currency(trx['total_value'])}</b>\n"
             f"📅 Ngày: {trx['date']}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ <i>CEO muốn thực hiện thao tác gì?</i>"
+            f"✏️ <b>CEO MUỐN SỬA HAY XÓA?</b>"
         )
-
-        keyboard = InlineKeyboardMarkup([
+        kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Sửa số lượng", callback_data=f"edit_qty_{trx_id}"),
              InlineKeyboardButton("✏️ Sửa giá", callback_data=f"edit_price_{trx_id}")],
             [InlineKeyboardButton("❌ XÓA GIAO DỊCH", callback_data=f"confirm_delete_{trx_id}")],
             [InlineKeyboardButton("🏠 Home", callback_data="go_home")]
         ])
-        
-        return text, keyboard
+        return text, kb
