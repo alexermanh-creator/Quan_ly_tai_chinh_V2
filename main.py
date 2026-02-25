@@ -14,9 +14,8 @@ ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
 def get_ceo_menu():
-    """Layout Menu (::) chuẩn CEO: Tài sản hàng đầu, các nút khác 2 cột"""
     return ReplyKeyboardMarkup([
-        [KeyboardButton("💼 Tài sản của bạn")], # Hàng 1: Ưu tiên cao nhất
+        [KeyboardButton("💼 Tài sản của bạn")],
         [KeyboardButton("📊 Chứng Khoán"), KeyboardButton("🪙 Crypto")],
         [KeyboardButton("🥇 Tài sản khác"), KeyboardButton("📜 Lịch sử")],
         [KeyboardButton("📊 Báo cáo"), KeyboardButton("🤖 AI Chat")],
@@ -36,7 +35,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     text = update.message.text
 
-    # 1. Điều hướng nút bấm
     if text == "💼 Tài sản của bạn":
         dash = DashboardModule(update.effective_user.id)
         await update.message.reply_html(dash.run())
@@ -47,20 +45,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(f"🔄 <b>Dữ liệu đã được cập nhật mới nhất:</b>\n\n{dash.run()}")
         return
 
-    # 2. Xử lý logic nhập liệu thông minh (nap 10ty, S HPG 100 25...)
     parsed_data = CommandParser.parse_transaction(text)
     if parsed_data:
         try:
+            # GỌI HÀM VỚI THAM SỐ ĐÃ ĐƯỢC ĐỒNG BỘ
             repo.save_transaction(
                 user_id=update.effective_user.id,
                 ticker=parsed_data['ticker'],
                 asset_type=parsed_data['asset_type'],
                 qty=parsed_data['qty'],
                 price=parsed_data['price'],
-                total_value=parsed_data['total_val'],
-                type=parsed_data['action']
+                total_value=parsed_data['total_val'], # Đồng bộ với Repository
+                type=parsed_data['action']             # Đồng bộ với Repository
             )
-            # Format tiền để thông báo cho sang trọng
             val_format = f"{parsed_data['total_val']:,.0f}".replace(',', '.')
             await update.message.reply_html(f"✅ <b>Ghi nhận thành công:</b>\n<code>{text.upper()}</code>\n💰 Giá trị: <b>{val_format}đ</b>")
         except Exception as e:
