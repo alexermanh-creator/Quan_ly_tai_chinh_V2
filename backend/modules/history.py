@@ -58,8 +58,6 @@ class HistoryModule(BaseModule):
             lines.append("<i>Chưa có dữ liệu giao dịch.</i>")
         
         current_date = ""
-        edit_buttons = [] # Danh sách chứa các nút bấm Cây Bút
-        
         for trx in transactions:
             date_str = trx['date'].split()[0]
             if date_str != current_date:
@@ -68,32 +66,18 @@ class HistoryModule(BaseModule):
             
             icon = "🟢" if trx['type'] in ['BUY', 'IN', 'DEPOSIT'] else "🔴"
             
-            # GIẢI PHÁP: Đã bỏ /view_ID đi, chỉ giữ lại thông tin cơ bản
+            # GIẢI PHÁP TỐI ƯU UI: Thay ID: #1 bằng ✏️ /1
             line = (
                 f"{icon} <b>{trx['type']} — {trx['ticker']}</b>\n"
                 f"SL: {trx['qty']} | Giá: {trx['price']:,.0f}\n"
-                f"Tổng: <b>{self.format_currency(trx['total_value'])}</b> | ID: #{trx['id']}\n"
+                f"Tổng: <b>{self.format_currency(trx['total_value'])}</b> | ✏️ /{trx['id']}\n"
                 f"────────────"
             )
             lines.append(line)
-            
-            # Tạo nút bấm Sửa (Cây bút) riêng biệt cho từng giao dịch
-            edit_buttons.append(InlineKeyboardButton(f"✏️ #{trx['id']}", callback_data=f"view_{trx['id']}"))
 
-        # KEYBOARD
+        # KEYBOARD (Gọn gàng, chỉ giữ Điều hướng và Lọc)
         keyboard = []
         
-        # Xếp các nút Cây Bút thành lưới (Tối đa 4 nút 1 hàng cho đẹp)
-        row = []
-        for btn in edit_buttons:
-            row.append(btn)
-            if len(row) == 4:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-
-        # Nút Điều hướng
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("⬅️ Trước", callback_data=f"hist_page_{page-1}_{asset_type or 'ALL'}"))
         nav.append(InlineKeyboardButton(f"Trang {page + 1}", callback_data="none"))
@@ -101,14 +85,12 @@ class HistoryModule(BaseModule):
             nav.append(InlineKeyboardButton("Sau ➡️", callback_data=f"hist_page_{page+1}_{asset_type or 'ALL'}"))
         if nav: keyboard.append(nav)
 
-        # Nút Lọc (Đã thêm Tiền mặt)
         keyboard.append([
             InlineKeyboardButton("📊 Stock", callback_data="hist_filter_STOCK"),
             InlineKeyboardButton("🪙 Crypto", callback_data="hist_filter_CRYPTO"),
             InlineKeyboardButton("💵 Tiền mặt", callback_data="hist_filter_CASH")
         ])
         
-        # Nút Tìm kiếm
         keyboard.append([
             InlineKeyboardButton("🔍 Tìm kiếm", callback_data="hist_search_prompt"),
             InlineKeyboardButton("🏠 Home", callback_data="go_home")
@@ -117,7 +99,7 @@ class HistoryModule(BaseModule):
         return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
     def get_detail_view(self, trx_id):
-        """📄 CHI TIẾT KHI CLICK VÀO ✏️"""
+        """📄 CHI TIẾT KHI CLICK VÀO ✏️ /1"""
         trx = self.repo.get_transaction_by_id(trx_id)
         if not trx: return "❌ Không tìm thấy giao dịch.", None
 
