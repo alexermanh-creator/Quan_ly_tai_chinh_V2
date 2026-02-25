@@ -4,126 +4,100 @@ from backend.database.db_manager import db
 
 class StockModule(BaseModule):
     def format_currency(self, value):
+        """Định dạng tiền tệ chuẩn: triệu hoặc đồng"""
         abs_val = abs(value)
-        sign = "-" if value < 0 else ""
-        if abs_val >= 10**9: return f"{sign}{value / 10**9:,.2f} tỷ"
-        if abs_val >= 10**6: return f"{sign}{value / 10**6:,.1f} triệu"
-        return f"{sign}{value:,.0f}đ"
-
-    def get_group_report(self):
-        """BÁO CÁO HIỆU SUẤT CỔ PHIẾU CHI TIẾT - FIXED LOGIC"""
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT ticker, current_price FROM manual_prices")
-            price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
-
-            cursor.execute("SELECT ticker, qty, price, total_value, type FROM transactions WHERE user_id = ? AND asset_type = 'STOCK'", (self.user_id,))
-            rows = cursor.fetchall()
-
-            if not rows: return "❌ Chưa có dữ liệu giao dịch."
-
-            portfolio_qty = {}
-            total_buy_val = 0
-            total_sell_val = 0
-
-            for r in rows:
-                tk = r['ticker']
-                if tk not in portfolio_qty: portfolio_qty[tk] = 0
-                if r['type'] == 'BUY':
-                    total_buy_val += r['total_value']
-                    portfolio_qty[tk] += r['qty']
-                else:
-                    total_sell_val += r['total_value']
-                    portfolio_qty[tk] -= r['qty']
-
-            current_mkt_val = 0
-            for tk, qty in portfolio_qty.items():
-                if qty > 0:
-                    # Lấy giá manual, nếu không có lấy giá mua trung bình gần nhất
-                    price = price_map.get(tk)
-                    if not price:
-                        cursor.execute("SELECT price FROM transactions WHERE ticker=? AND type='BUY' ORDER BY date DESC LIMIT 1", (tk,))
-                        res = cursor.fetchone()
-                        price = res[0] if res else 0
-                    current_mkt_val += qty * price * 1000
-
-            net_invested = total_buy_val - total_sell_val
-            profit = current_mkt_val - net_invested
-            roi = (profit / net_invested * 100) if net_invested > 0 else 0
-            status = "🚀 Tốt" if roi > 10 else "⚖️ Ổn định" if roi >= 0 else "⚠️ Cần rà soát"
-
-            lines = [
-                "📈 <b>BÁO CÁO HIỆU SUẤT CỔ PHIẾU</b>",
-                f"💰 <b>Vốn ròng còn lại:</b> {self.format_currency(net_invested)}",
-                f"💵 <b>Giá trị hiện tại:</b> {self.format_currency(current_mkt_val)}",
-                f"📊 <b>Tổng lãi/lỗ:</b> <b>{self.format_currency(profit)}</b>",
-                f"🚀 <b>ROI:</b> <b>{roi:+.2f}%</b>",
-                "",
-                f"⬆️ Tổng nạp Stock: {self.format_currency(total_buy_val)}",
-                f"⬇️ Tổng rút Stock: {self.format_currency(total_sell_val)}",
-                "",
-                f"🔥 <b>Đánh giá Danh mục:</b> {status}",
-                "━━━━━━━━━━━━━━━━━━━",
-                "🏠 <i>Dữ liệu dựa trên giá cập nhật mới nhất.</i>"
-            ]
-            return "\n".join(lines)
+        sign = "+" if value > 0 else "-" if value < 0 else ""
+        if abs_val >= 10**6:
+            return f"{sign}{abs_val / 10**6:,.1f} triệu"
+        return f"{sign}{abs_val:,.0f}đ"
 
     def run(self):
         with db.get_connection() as conn:
             cursor = conn.cursor()
+            # 1. Lấy bảng giá thị trường
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
 
+            # 2. Lấy toàn bộ giao dịch Stock
             cursor.execute("SELECT ticker, qty, price, total_value, type FROM transactions WHERE user_id = ? AND asset_type = 'STOCK'", (self.user_id,))
             transactions = cursor.fetchall()
 
-            if not transactions: return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu."
+            if not transactions:
+                return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu giao dịch."
 
+            # 3. Tính toán logic tài chính chuẩn
             portfolio = {}
+            total_deposit = 0 # Tổng nạp nhóm Stock (Lệnh BUY)
+            total_withdraw = 0 # Tổng rút nhóm Stock (Lệnh SELL)
+
             for tx in transactions:
                 tk = tx['ticker']
-                if tk not in portfolio: portfolio[tk] = {'qty': 0, 'total_cost': 0}
+                if tk not in portfolio:
+                    portfolio[tk] = {'qty': 0, 'total_cost': 0}
+                
                 if tx['type'] == 'BUY':
                     portfolio[tk]['qty'] += tx['qty']
                     portfolio[tk]['total_cost'] += tx['total_value']
-                else:
+                    total_deposit += tx['total_value']
+                elif tx['type'] == 'SELL':
+                    # Trừ vốn theo tỷ lệ bình quân gia quyền
                     if portfolio[tk]['qty'] > 0:
-                        avg_cost = portfolio[tk]['total_cost'] / portfolio[tk]['qty']
-                        portfolio[tk]['total_cost'] -= tx['qty'] * avg_cost
+                        avg_cost_unit = portfolio[tk]['total_cost'] / portfolio[tk]['qty']
+                        portfolio[tk]['total_cost'] -= tx['qty'] * avg_cost_unit
+                    
                     portfolio[tk]['qty'] -= tx['qty']
+                    total_withdraw += tx['total_value']
 
+            # 4. Phân tích chi tiết từng mã và tìm Top mã
             stock_details = []
-            total_mkt_val = 0
-            total_cost_val = 0
+            total_market_value = 0
             stats = []
 
             for tk, data in portfolio.items():
                 if data['qty'] <= 0: continue
-                avg_p = data['total_cost'] / data['qty'] / 1000
-                curr_p = price_map.get(tk, avg_p)
-                val = data['qty'] * curr_p * 1000
-                profit = val - data['total_cost']
-                profit_pct = (profit / data['total_cost'] * 100) if data['total_cost'] > 0 else 0
                 
-                total_mkt_val += val
-                total_cost_val += data['total_cost']
-                stats.append({'tk': tk, 'pct': profit_pct, 'val': val})
+                # Tính các chỉ số cho mỗi mã
+                avg_cost_price = data['total_cost'] / data['qty'] / 1000
+                curr_price = price_map.get(tk, avg_cost_price) # Mặc định bằng giá vốn nếu chưa cập nhật
+                mkt_val = data['qty'] * curr_price * 1000
+                profit = mkt_val - data['total_cost']
+                roi = (profit / data['total_cost'] * 100) if data['total_cost'] > 0 else 0
+                
+                total_market_value += mkt_val
+                stats.append({'ticker': tk, 'roi': roi, 'value': mkt_val})
 
+                # Render Body chi tiết từng mã
                 stock_details.append(
-                    f"<b>{tk}</b>\nSL: {data['qty']:,.0f}\nGiá vốn TB: {avg_p:,.1f}\nGiá hiện tại: {curr_p:,.1f}\n"
-                    f"Giá trị: {self.format_currency(val)}\nLãi: {self.format_currency(profit)} ({profit_pct:+.1f}%)"
+                    f"<b>{tk}</b>\n"
+                    f"SL: {data['qty']:,.0f}\n"
+                    f"Giá vốn TB: {avg_cost_price:,.1f}\n"
+                    f"Giá hiện tại: {curr_price:,.1f}\n"
+                    f"Giá trị: {self.format_currency(mkt_val).replace('+', '')}\n"
+                    f"Lãi: {self.format_currency(profit)} ({roi:+.1f}%)"
                 )
 
-            best = max(stats, key=lambda x: x['pct'])
-            biggest = max(stats, key=lambda x: x['val'])
+            # 5. Tính toán các chỉ số Header danh mục
+            total_net_cost = total_deposit - total_withdraw
+            total_profit_all = total_market_value - total_net_cost
+            total_roi_all = (total_profit_all / total_net_cost * 100) if total_net_cost > 0 else 0
+            
+            best = max(stats, key=lambda x: x['roi'])
+            worst = min(stats, key=lambda x: x['roi'])
+            biggest = max(stats, key=lambda x: x['value'])
+            biggest_pct = (biggest['value'] / total_market_value * 100) if total_market_value > 0 else 0
 
+            # --- RENDER LAYOUT ĐẦY ĐỦ NHƯ CEO YÊU CẦU ---
             lines = [
-                "📊 <b>DANH MỤC CỔ PHIẾU</b>",
-                f"💰 Tổng giá trị: <b>{self.format_currency(total_mkt_val)}</b>",
-                f"💵 Tổng vốn: {self.format_currency(total_cost_val)}",
-                f"📈 Lãi: {self.format_currency(total_mkt_val - total_cost_val)} ({(total_mkt_val/total_cost_val-1)*100:+.1f}%)",
-                f"🏆 Tốt nhất: {best['tk']} ({best['pct']:+.1f}%)",
-                f"📊 Tỉ trọng lớn nhất: {biggest['tk']} ({(biggest['val']/total_mkt_val*100):.1f}%)",
+                "📊",
+                "<b>DANH MỤC CỔ PHIẾU</b>",
+                f"💰 Tổng giá trị: {self.format_currency(total_market_value).replace('+', '')}",
+                f"💵 Tổng vốn: {self.format_currency(total_net_cost).replace('+', '')}",
+                f"📈 Lãi: {self.format_currency(total_profit_all)} ({total_roi_all:+.1f}%)",
+                f"⬆️ Tổng nạp: {self.format_currency(total_deposit).replace('+', '')}",
+                f"⬇️ Tổng rút: {self.format_currency(total_withdraw).replace('+', '')}",
+                f"🏆 Mã tốt nhất: {best['ticker']} ({best['roi']:+.1f}%)",
+                f"📉 Mã kém nhất: {worst['ticker']} ({worst['roi']:+.1f}%)",
+                f"📊 Tỉ trọng lớn nhất: {biggest['ticker']} ({biggest_pct:.1f}%)",
                 "────────────",
                 "\n────────────\n".join(stock_details),
                 "────────────"
