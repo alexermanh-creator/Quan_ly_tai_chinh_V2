@@ -56,7 +56,8 @@ class DashboardModule(BaseModule):
                 SELECT SUM(CASE WHEN type='BUY' THEN qty ELSE -qty END * price) 
                 FROM transactions WHERE user_id = ? AND asset_type = 'CRYPTO'
             ''', (self.user_id,))
-            crypto_vnd = (cursor.fetchone()[0] or 0) * EX_RATE
+            crypto_raw = cursor.fetchone()[0] or 0
+            crypto_vnd = crypto_raw * EX_RATE
 
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'OTHER'", (self.user_id,))
             other_val = cursor.fetchone()[0] or 0
@@ -73,7 +74,7 @@ class DashboardModule(BaseModule):
             f"💰 Tổng: <b>{self.format_currency(total_assets)}</b>",
             f"📈 Lãi: {self.format_currency(profit)} (🟢 {roi:+.1f}%)",
             "",
-            f"📊 Stock: {self.format_currency(stock_mkt_val)}", # Đã sửa để dùng giá thị trường
+            f"📊 Stock: {self.format_currency(stock_mkt_val)}",
             f"🪙 Crypto: {self.format_currency(crypto_vnd)}",
             f"🥇 Khác: {self.format_currency(other_val)}",
             "",
@@ -85,10 +86,9 @@ class DashboardModule(BaseModule):
             f"⬇️ Tổng rút: {self.format_currency(t_out)}",
             "━━━━━━━━━━━━━━━━━━━",
             f"🏦 Tiền mặt: {self.format_currency(cash_balance)}",
-            f"📊 Cổ phiếu: {self.format_currency(stock_mkt_val)}", # Đã sửa đồng bộ
+            f"📊 Cổ phiếu: {self.format_currency(stock_mkt_val)}",
             f"🪙 Crypto: {self.format_currency(crypto_vnd)}",
             "",
             "🏠 <i>Quay Về Trang Chủ.</i>"
         ]
         return "\n".join(lines)
-
