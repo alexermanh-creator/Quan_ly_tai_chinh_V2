@@ -52,26 +52,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # 1. XỬ LÝ DANH MỤC CỔ PHIẾU (Hiển thị Layout chi tiết + Đổi Menu)
+    # 1. XỬ LÝ DANH MỤC CỔ PHIẾU
     if text == "📊 Chứng Khoán":
         stock_mod = StockModule(user_id)
-        # Khi ấn nút này, Bot sẽ render nội dung từ StockModule.run()
-        await update.message.reply_html(
-            stock_mod.run(), 
-            reply_markup=get_stock_menu() # Đổi bộ nút bấm sang Giao dịch, Cập nhật giá...
-        )
+        await update.message.reply_html(stock_mod.run(), reply_markup=get_stock_menu())
         return
 
     # 2. QUAY VỀ TRANG CHỦ
     if text == "💼 Tài sản của bạn" or text == "🏠 Trang chủ":
         dash = DashboardModule(user_id)
-        await update.message.reply_html(
-            dash.run(), 
-            reply_markup=get_ceo_menu() # Đổi bộ nút bấm quay lại 12 nút gốc
-        )
+        await update.message.reply_html(dash.run(), reply_markup=get_ceo_menu())
         return
 
-    # 3. XỬ LÝ LỆNH CẬP NHẬT GIÁ (gia [Mã] [Giá])
+    # 3. BÁO CÁO NHÓM (Tính năng mới)
+    if text == "📈 Báo cáo nhóm":
+        stock_mod = StockModule(user_id)
+        await update.message.reply_html(stock_mod.get_group_report())
+        return
+
+    # 4. XỬ LÝ LỆNH XÓA (xoa VNM) (Tính năng mới)
+    if text.lower().startswith("xoa "):
+        parts = text.split()
+        if len(parts) == 2:
+            ticker_del = parts[1].upper()
+            with db.get_connection() as conn:
+                conn.execute("DELETE FROM transactions WHERE ticker = ? AND asset_type = 'STOCK'", (ticker_del,))
+                conn.execute("DELETE FROM manual_prices WHERE ticker = ?", (ticker_del,))
+                conn.commit()
+            await update.message.reply_html(f"🗑 Đã xóa toàn bộ dữ liệu mã <b>{ticker_del}</b>.")
+            stock_mod = StockModule(user_id)
+            await update.message.reply_html(stock_mod.run())
+            return
+
+    # 5. HƯỚNG DẪN CÁC NÚT TRONG STOCK
+    if text == "➕ Giao dịch":
+        await update.message.reply_html("➕ <b>GIAO DỊCH:</b> Hãy gõ theo cú pháp:\n<code>S [Mã] [Số lượng] [Giá]</code>\nVí dụ: <code>S HPG 1000 28.5</code>")
+        return
+    
+    if text == "🔄 Cập nhật giá":
+        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b> Hãy gõ theo cú pháp:\n<code>gia [Mã] [Giá mới]</code>\nVí dụ: <code>gia VPB 30.2</code>")
+        return
+
+    if text == "❌ Xóa mã":
+        await update.message.reply_html("🗑 <b>XÓA MÃ:</b> Gõ <code>xoa [Mã]</code> để xóa sạch lịch sử.\nVí dụ: <code>xoa VNM</code>")
+        return
+
+    # 6. XỬ LÝ CẬP NHẬT GIÁ (gia [Mã] [Giá])
     if text.lower().startswith("gia "):
         match = re.match(r'^gia\s+([a-z0-9]+)\s+([\d\.,]+)$', text.lower().strip())
         if match:
@@ -89,22 +115,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_html(f"✅ Đã cập nhật giá mới cho <b>{ticker}</b>: <code>{price}</code>")
             return
 
-    # 4. CÁC NÚT CHỨC NĂNG TRONG STOCK (Hướng dẫn)
-    if text == "➕ Giao dịch":
-        await update.message.reply_html("➕ <b>GIAO DỊCH:</b> Hãy gõ theo cú pháp:\n<code>S [Mã] [Số lượng] [Giá]</code>\nVí dụ: <code>S HPG 1000 28.5</code>")
-        return
-    
-    if text == "🔄 Cập nhật giá":
-        await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b> Hãy gõ theo cú pháp:\n<code>gia [Mã] [Giá mới]</code>\nVí dụ: <code>gia VPB 30.2</code>")
-        return
-
-    # 5. XỬ LÝ LÀM MỚI
+    # 7. XỬ LÝ LÀM MỚI
     if text == "🔄 Làm mới":
         dash = DashboardModule(user_id)
         await update.message.reply_html(f"🔄 <b>Dữ liệu đã được làm mới:</b>\n\n{dash.run()}")
         return
 
-    # 6. XỬ LÝ LỆNH NHẬP LIỆU (Parser)
+    # 8. XỬ LÝ LỆNH NHẬP LIỆU (Parser)
     parsed_data = CommandParser.parse_transaction(text)
     if parsed_data:
         try:
