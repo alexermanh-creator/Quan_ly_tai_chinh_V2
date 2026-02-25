@@ -15,12 +15,11 @@ class StockModule(BaseModule):
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Lấy giá cập nhật thủ công mới nhất
+            # 1. Lấy giá cập nhật thủ công từ bảng manual_prices
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
 
-            # 2. Lấy dữ liệu nạp/rút riêng của nhánh STOCK (nếu có ghi chú)
-            # Tạm thời tính tổng nạp/rút dựa trên các lệnh BUY/SELL
+            # 2. Lấy dữ liệu giao dịch STOCK
             cursor.execute('''
                 SELECT ticker, qty, price, total_value, type 
                 FROM transactions 
@@ -31,10 +30,10 @@ class StockModule(BaseModule):
             if not transactions:
                 return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu giao dịch chứng khoán."
 
-            # 3. Xử lý logic tính Giá vốn TB và Số lượng nắm giữ
+            # 3. Tính toán Giá vốn TB và Số lượng nắm giữ
             portfolio = {}
-            total_buy_value = 0 # Tổng vốn đã chi ra
-            total_sell_value = 0 # Tổng tiền đã thu về khi bán
+            total_buy_all = 0  # Tổng nạp (BUY)
+            total_sell_all = 0 # Tổng rút (SELL)
 
             for tx in transactions:
                 tk = tx['ticker']
@@ -44,65 +43,85 @@ class StockModule(BaseModule):
                 if tx['type'] == 'BUY':
                     portfolio[tk]['qty'] += tx['qty']
                     portfolio[tk]['total_cost'] += tx['total_value']
-                    total_buy_value += tx['total_value']
+                    total_buy_all += tx['total_value']
                 elif tx['type'] == 'SELL':
+                    # Tính toán giảm số lượng và giảm vốn tương ứng (FIFO đơn giản)
+                    if portfolio[tk]['qty'] > 0:
+                        avg_cost_temp = portfolio[tk]['total_cost'] / portfolio[tk]['qty']
+                        portfolio[tk]['total_cost'] -= tx['qty'] * avg_cost_temp
+                    
                     portfolio[tk]['qty'] -= tx['qty']
-                    # Khi bán, ta trừ bớt vốn tương ứng với tỷ lệ số lượng
-                    # (Hoặc đơn giản là theo dõi dòng tiền thu về)
-                    total_sell_value += tx['total_value']
+                    total_sell_all += tx['total_value']
 
-            # 4. Render danh sách chi tiết mã
-            stock_details = []
+            # 4. Tính toán chi tiết từng mã và tìm mã tốt nhất/kém nhất
+            stock_details_list = []
             total_market_value = 0
-            best_code = {"ticker": "N/A", "profit": -999}
-            worst_code = {"ticker": "N/A", "profit": 999}
+            total_net_cost = 0 # Tổng vốn hiện tại đang nằm trong CP
             
+            # Để tìm mã tốt nhất/kém nhất/tỉ trọng lớn nhất
+            codes_stats = []
+
             for tk, data in portfolio.items():
-                if data['qty'] <= 0: continue # Bỏ qua mã đã bán hết
+                if data['qty'] <= 0: continue 
 
                 avg_price = (data['total_cost'] / data['qty'] / 1000) if data['qty'] > 0 else 0
-                curr_price = price_map.get(tk, avg_price) # Nếu chưa có giá manual, coi như bằng giá vốn
+                curr_price = price_map.get(tk, avg_price) 
                 
                 mkt_value = data['qty'] * curr_price * 1000
                 profit = mkt_value - data['total_cost']
                 profit_pct = (profit / data['total_cost'] * 100) if data['total_cost'] > 0 else 0
                 
                 total_market_value += mkt_value
+                total_net_cost += data['total_cost']
                 
-                # Tìm mã tốt nhất/kém nhất
-                if profit_pct > best_code["profit"]:
-                    best_code = {"ticker": tk, "profit": profit_pct}
-                if profit_pct < worst_code["profit"]:
-                    worst_code = {"ticker": tk, "profit": profit_pct}
+                codes_stats.append({
+                    'ticker': tk,
+                    'profit_pct': profit_pct,
+                    'mkt_value': mkt_value,
+                    'qty': data['qty'],
+                    'avg_price': avg_price,
+                    'curr_price': curr_price,
+                    'profit': profit
+                })
 
+            if not codes_stats:
+                return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nDanh mục hiện tại đang trống."
+
+            # Sắp xếp để tìm các chỉ số
+            best = max(codes_stats, key=lambda x: x['profit_pct'])
+            worst = min(codes_stats, key=lambda x: x['profit_pct'])
+            biggest = max(codes_stats, key=lambda x: x['mkt_value'])
+
+            # 5. Build danh sách hiển thị
+            for item in codes_stats:
                 detail = (
-                    f"<b>{tk}</b>\n"
-                    f"SL: {data['qty']:,g}\n"
-                    f"Giá vốn TB: {avg_price:,.2f}\n"
-                    f"Giá hiện tại: {curr_price:,.2f}\n"
-                    f"Giá trị: {self.format_currency(mkt_value)}\n"
-                    f"Lãi: {profit:+.0f} ({profit_pct:+.1f}%)"
+                    f"<b>{item['ticker']}</b>\n"
+                    f"SL: {item['qty']:,.0f}\n"
+                    f"Giá vốn TB: {item['avg_price']:,.1f}\n"
+                    f"Giá hiện tại: {item['curr_price']:,.1f}\n"
+                    f"Giá trị: {self.format_currency(item['mkt_value'])}\n"
+                    f"Lãi: {self.format_currency(item['profit'])} ({item['profit_pct']:+.1f}%)"
                 )
-                stock_details.append(detail)
+                stock_details_list.append(detail)
 
-            # 5. Tính toán các chỉ số tổng hợp
-            net_profit = total_market_value - (total_buy_value - total_sell_value)
-            roi = (net_profit / (total_buy_value - total_sell_value) * 100) if (total_buy_value - total_sell_value) > 0 else 0
+            # 6. Render HTML chuẩn Layout CEO
+            profit_total = total_market_value - total_net_cost
+            roi_total = (profit_total / total_net_cost * 100) if total_net_cost > 0 else 0
+            biggest_pct = (biggest['mkt_value'] / total_market_value * 100) if total_market_value > 0 else 0
 
-            # Render HTML Layout
             lines = [
                 "📊",
                 "<b>DANH MỤC CỔ PHIẾU</b>",
                 f"💰 Tổng giá trị: <b>{self.format_currency(total_market_value)}</b>",
-                f"💵 Tổng vốn: {self.format_currency(total_buy_value - total_sell_value)}",
-                f"📈 Lãi: {net_profit:+.0f} ({roi:+.1f}%)",
-                f"⬆️ Tổng nạp: {self.format_currency(total_buy_value)}",
-                f"⬇️ Tổng rút: {self.format_currency(total_sell_value)}",
-                f"🏆 Mã tốt nhất: {best_code['ticker']} ({best_code['profit']:+.1f}%)",
-                f"📉 Mã kém nhất: {worst_code['ticker']} ({worst_code['profit']:+.1f}%)",
-                f"📊 Tỉ trọng lớn nhất: {best_code['ticker']} (Tạm tính...)",
+                f"💵 Tổng vốn: {self.format_currency(total_net_cost)}",
+                f"📈 Lãi: {self.format_currency(profit_total)} ({roi_total:+.1f}%)",
+                f"⬆️ Tổng nạp: {self.format_currency(total_buy_all)}",
+                f"⬇️ Tổng rút: {self.format_currency(total_sell_all)}",
+                f"🏆 Mã tốt nhất: {best['ticker']} ({best['profit_pct']:+.1f}%)",
+                f"📉 Mã kém nhất: {worst['ticker']} ({worst['profit_pct']:+.1f}%)",
+                f"📊 Tỉ trọng lớn nhất: {biggest['ticker']} ({biggest_pct:.1f}%)",
                 "────────────",
-                "\n────────────\n".join(stock_details),
+                "\n────────────\n".join(stock_details_list),
                 "────────────"
             ]
             return "\n".join(lines)
