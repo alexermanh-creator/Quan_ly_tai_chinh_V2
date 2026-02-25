@@ -11,12 +11,14 @@ class StockModule(BaseModule):
         return f"{sign}{abs_val:,.0f}đ"
 
     def run(self):
-        """📊 LAYOUT DANH MỤC CHI TIẾT (10 CHỈ SỐ)"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
+            
+            # 1. Lấy giá thủ công (nếu có)
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
-            
+
+            # 2. Lấy toàn bộ giao dịch
             cursor.execute("SELECT ticker, qty, price, total_value, type FROM transactions WHERE user_id = ? AND asset_type = 'STOCK' ORDER BY date ASC", (self.user_id,))
             transactions = cursor.fetchall()
 
@@ -29,20 +31,16 @@ class StockModule(BaseModule):
 
             for tx in transactions:
                 tk = tx['ticker']
-                if tk not in portfolio: portfolio[tk] = {'qty': 0, 'total_cost': 0, 'buy_qty': 0, 'buy_cost': 0}
+                if tk not in portfolio: portfolio[tk] = {'qty': 0, 'total_cost': 0}
                 
                 if tx['type'] == 'BUY':
                     portfolio[tk]['qty'] += tx['qty']
                     portfolio[tk]['total_cost'] += tx['total_value']
-                    # Lưu lại gốc để tính giá vốn TB không bị biến động khi bán
-                    portfolio[tk]['buy_qty'] += tx['qty']
-                    portfolio[tk]['buy_cost'] += tx['total_value']
                     total_deposit += tx['total_value']
                 elif tx['type'] == 'SELL':
                     if portfolio[tk]['qty'] > 0:
-                        # Trừ vốn theo tỷ lệ thuận với số lượng bán
-                        unit_cost = portfolio[tk]['total_cost'] / portfolio[tk]['qty']
-                        portfolio[tk]['total_cost'] -= tx['qty'] * unit_cost
+                        avg_cost_unit = portfolio[tk]['total_cost'] / portfolio[tk]['qty']
+                        portfolio[tk]['total_cost'] -= tx['qty'] * avg_cost_unit
                     portfolio[tk]['qty'] -= tx['qty']
                     total_withdraw += tx['total_value']
 
@@ -53,15 +51,15 @@ class StockModule(BaseModule):
             for tk, data in portfolio.items():
                 if data['qty'] <= 0: continue
                 
-                # Tính giá vốn TB dựa trên lượng vốn còn kẹt lại
-                avg_cost_price = (data['total_cost'] / data['qty'] / 1000)
+                # Logic V1: Giá vốn TB
+                avg_cost_price = data['total_cost'] / data['qty'] / 1000
                 
-                # FIX LỖI GIÁ: Ưu tiên giá manual, nếu ko có lấy giá bán/mua cuối cùng
-                curr_price = price_map.get(tk)
-                if curr_price is None:
-                    cursor.execute("SELECT price FROM transactions WHERE ticker=? ORDER BY date DESC LIMIT 1", (tk,))
-                    res = cursor.fetchone()
-                    curr_price = res[0] if res else avg_cost_price
+                # Logic V1: Lấy giá của lệnh cuối cùng làm giá hiện tại
+                cursor.execute("SELECT price FROM transactions WHERE ticker=? AND user_id=? ORDER BY date DESC LIMIT 1", (tk, self.user_id))
+                last_price = cursor.fetchone()[0]
+                
+                # Ưu tiên giá manual nếu CEO có dùng lệnh 'gia'
+                curr_price = price_map.get(tk, last_price)
                 
                 mkt_val = data['qty'] * curr_price * 1000
                 profit = mkt_val - data['total_cost']
