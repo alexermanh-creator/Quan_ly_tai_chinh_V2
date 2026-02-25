@@ -31,7 +31,7 @@ class DashboardModule(BaseModule):
             total_received = cursor.fetchone()[0] or 0
             cash_balance = net_invested - total_spent + total_received
 
-            # --- 3. GIÁ TRỊ THỊ TRƯỜNG STOCK (Dùng Manual Prices) ---
+            # --- 3. GIÁ TRỊ THỊ TRƯỜNG STOCK ---
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
             
@@ -45,9 +45,10 @@ class DashboardModule(BaseModule):
             for s in stocks:
                 qty = s['current_qty']
                 if qty > 0:
-                    price = price_map.get(s['ticker'])
+                    tk = s['ticker']
+                    price = price_map.get(tk)
                     if price is None:
-                        cursor.execute("SELECT price FROM transactions WHERE ticker=? AND type='BUY' ORDER BY date DESC LIMIT 1", (s['ticker'],))
+                        cursor.execute("SELECT price FROM transactions WHERE ticker=? ORDER BY date DESC LIMIT 1", (tk,))
                         price = cursor.fetchone()[0] or 0
                     stock_mkt_val += qty * price * 1000
 
@@ -56,8 +57,7 @@ class DashboardModule(BaseModule):
                 SELECT SUM(CASE WHEN type='BUY' THEN qty ELSE -qty END * price) 
                 FROM transactions WHERE user_id = ? AND asset_type = 'CRYPTO'
             ''', (self.user_id,))
-            crypto_raw = cursor.fetchone()[0] or 0
-            crypto_vnd = crypto_raw * EX_RATE
+            crypto_vnd = (cursor.fetchone()[0] or 0) * EX_RATE
 
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'OTHER'", (self.user_id,))
             other_val = cursor.fetchone()[0] or 0
