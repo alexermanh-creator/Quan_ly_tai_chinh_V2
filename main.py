@@ -48,25 +48,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parsed_data = CommandParser.parse_transaction(text)
     if parsed_data:
         try:
-            # GỌI HÀM VỚI THAM SỐ ĐÃ ĐƯỢC ĐỒNG BỘ
+            # Đồng bộ tham số qty và total_value
             repo.save_transaction(
                 user_id=update.effective_user.id,
                 ticker=parsed_data['ticker'],
                 asset_type=parsed_data['asset_type'],
                 qty=parsed_data['qty'],
                 price=parsed_data['price'],
-                total_value=parsed_data['total_val'], # Đồng bộ với Repository
-                type=parsed_data['action']             # Đồng bộ với Repository
+                total_value=parsed_data['total_val'],
+                type=parsed_data['action']
             )
+            # Hiển thị số tiền đẹp mắt (Ví dụ: 10.000.000.000đ)
             val_format = f"{parsed_data['total_val']:,.0f}".replace(',', '.')
-            await update.message.reply_html(f"✅ <b>Ghi nhận thành công:</b>\n<code>{text.upper()}</code>\n💰 Giá trị: <b>{val_format}đ</b>")
+            await update.message.reply_html(
+                f"✅ <b>Ghi nhận thành công:</b>\n"
+                f"📝 Lệnh: <code>{text.upper()}</code>\n"
+                f"💰 Giá trị: <b>{val_format}đ</b>"
+            )
         except Exception as e:
             await update.message.reply_text(f"❌ Lỗi Database: {e}")
     else:
-        await update.message.reply_text("❓ Lệnh không hợp lệ. Hãy sử dụng Menu (::) hoặc gõ ví dụ: <code>nap 10ty</code>")
+        # Nếu không phải lệnh giao dịch, không báo lỗi phiền phức, chỉ hướng dẫn nếu cần
+        if len(text.split()) > 1:
+            await update.message.reply_text("❓ Lệnh không hợp lệ. Ví dụ: <code>nap 10ty</code>")
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler('start', start))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    print("🚀 Bot Finance đang khởi động...")
     application.run_polling(drop_pending_updates=True)
