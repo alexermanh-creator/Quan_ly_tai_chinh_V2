@@ -86,3 +86,34 @@ class Repository:
             ''', (user_id,))
             result = cursor.fetchone()
             return result['balance'] if result and result['balance'] else 0
+
+    # ==========================================
+    # --- CÁC HÀM MỚI BỔ SUNG CHO BÁO CÁO ---
+    # ==========================================
+
+    @staticmethod
+    def get_all_transactions_for_report(user_id, end_date=None):
+        """
+        Lấy TẤT CẢ giao dịch từ trước đến nay (tới end_date nếu có)
+        Sắp xếp CŨ ĐẾN MỚI (ASC) để tính giá vốn và PnL chính xác.
+        """
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM transactions WHERE user_id = ?"
+            params = [user_id]
+
+            if end_date:
+                query += " AND date <= ?"
+                params.append(f"{end_date} 23:59:59")
+
+            query += " ORDER BY date ASC" 
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def get_current_prices():
+        """Lấy giá thị trường hiện tại của toàn bộ danh mục từ manual_prices"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ticker, current_price FROM manual_prices")
+            return {row['ticker']: row['current_price'] for row in cursor.fetchall()}
