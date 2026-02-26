@@ -6,6 +6,7 @@ import xlsxwriter
 from backend.database.repository import Repository
 
 def generate_excel_report(user_id):
+    """Cỗ máy xuất Excel Pro tích hợp Dashboard và Phân tích danh mục"""
     raw_data = Repository.get_all_transactions_for_report(user_id)
     current_prices = Repository.get_current_prices()
     
@@ -23,7 +24,7 @@ def generate_excel_report(user_id):
     # --- XỬ LÝ DỮ LIỆU ---
     df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame()
     
-    # 1. Tính toán Portfolio (Danh mục hiện tại)
+    # Tính toán Portfolio thực tế
     portfolio = {}
     total_in = 0
     total_out = 0
@@ -56,8 +57,8 @@ def generate_excel_report(user_id):
             portfolio_list.append({
                 'Mã': t, 'Loại': v['type'], 'Số lượng': v['qty'], 
                 'Giá vốn': v['cost'], 'Giá hiện tại': curr_p,
-                'Tổng vốn': cost_val, 'Giá trị TT': market_val,
-                'Lãi/Lỗ': pnl, '% Lãi/Lỗ': pnl/cost_val if cost_val > 0 else 0
+                'Tổng vốn đầu tư': cost_val, 'Giá trị thị trường': market_val,
+                'Lãi/Lỗ tạm tính': pnl, '% Lãi/Lỗ': pnl/cost_val if cost_val > 0 else 0
             })
     df_port = pd.DataFrame(portfolio_list)
 
@@ -66,23 +67,23 @@ def generate_excel_report(user_id):
     ws_dash.hide_gridlines(2)
     ws_dash.merge_range('A1:H1', 'BÁO CÁO TÀI CHÍNH QUẢN TRỊ', title_fmt)
     
-    # Summary Table
-    ws_dash.write('B3', 'TỔNG TÀI SẢN', header_fmt)
-    ws_dash.write('C3', 'VỐN RÒNG', header_fmt)
-    ws_dash.write('D3', 'LÃI/LỖ TẠM TÍNH', header_fmt)
+    # Bảng Summary nhanh
+    ws_dash.write('B3', 'TỔNG TÀI SẢN (AUM)', header_fmt)
+    ws_dash.write('C3', 'VỐN RÒNG THỰC NẠP', header_fmt)
+    ws_dash.write('D3', 'P&L TỔNG HỢP', header_fmt)
     
-    aum = df_port['Giá trị TT'].sum() if not df_port.empty else 0
+    aum = df_port['Giá trị thị trường'].sum() if not df_port.empty else 0
     net_invested = total_in - total_out
     ws_dash.write('B4', aum, money_fmt)
     ws_dash.write('C4', net_invested, money_fmt)
     ws_dash.write('D4', aum - net_invested if net_invested > 0 else 0, money_fmt)
 
-    # Dữ liệu cho biểu đồ tròn (Phân bổ tài sản)
+    # Vẽ Biểu đồ phân bổ
     if not df_port.empty:
-        summary_cat = df_port.groupby('Loại')['Giá trị TT'].sum().reset_index()
+        summary_cat = df_port.groupby('Loại')['Giá trị thị trường'].sum().reset_index()
         for i, row in summary_cat.iterrows():
             ws_dash.write(i+20, 10, row['Loại'])
-            ws_dash.write(i+20, 11, row['Giá trị TT'])
+            ws_dash.write(i+20, 11, row['Giá trị thị trường'])
         
         pie_chart = workbook.add_chart({'type': 'pie'})
         pie_chart.add_series({
@@ -99,8 +100,8 @@ def generate_excel_report(user_id):
         df_port.to_excel(writer, sheet_name='💼 Danh Mục', index=False)
         ws_p = writer.sheets['💼 Danh Mục']
         ws_p.set_column('A:E', 12, border_fmt)
-        ws_p.set_column('F:H', 18, money_fmt)
-        ws_p.set_column('I:I', 12, pct_fmt)
+        ws_p.set_column('F:H', 20, money_fmt)
+        ws_p.set_column('I:I', 15, pct_fmt)
 
     # --- SHEET 3: NHẬT KÝ GIAO DỊCH ---
     df_tx.to_excel(writer, sheet_name='📝 Nhật Ký', index=False)
