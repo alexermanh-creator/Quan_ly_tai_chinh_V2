@@ -47,7 +47,6 @@ class Repository:
 
     @staticmethod
     def update_transaction(trx_id, qty, price, total_value, date=None):
-        """Bản nâng cấp: Cho phép sửa cả Ngày tháng"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
             if date:
@@ -66,14 +65,6 @@ class Repository:
             return cursor.rowcount > 0
 
     @staticmethod
-    def undo_last_transaction(user_id):
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM transactions WHERE id = (SELECT MAX(id) FROM transactions WHERE user_id = ?)', (user_id,))
-            conn.commit()
-            return cursor.rowcount > 0
-
-    @staticmethod
     def get_available_cash(user_id):
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -87,32 +78,22 @@ class Repository:
             result = cursor.fetchone()
             return result['balance'] if result and result['balance'] else 0
 
-    # ==========================================
-    # --- CÁC HÀM MỚI BỔ SUNG CHO BÁO CÁO ---
-    # ==========================================
-
     @staticmethod
     def get_all_transactions_for_report(user_id, end_date=None):
-        """
-        Lấy TẤT CẢ giao dịch từ trước đến nay (tới end_date nếu có)
-        Sắp xếp CŨ ĐẾN MỚI (ASC) để tính giá vốn và PnL chính xác.
-        """
+        """Lấy TẤT CẢ giao dịch sắp xếp ASC để tính toán"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM transactions WHERE user_id = ?"
             params = [user_id]
-
             if end_date:
                 query += " AND date <= ?"
                 params.append(f"{end_date} 23:59:59")
-
             query += " ORDER BY date ASC" 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def get_current_prices():
-        """Lấy giá thị trường hiện tại của toàn bộ danh mục từ manual_prices"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
