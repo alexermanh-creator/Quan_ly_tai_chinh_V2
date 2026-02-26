@@ -1,5 +1,6 @@
 # backend/database/repository.py
 from backend.database.db_manager import db
+import sqlite3
 
 class Repository:
     @staticmethod
@@ -50,17 +51,9 @@ class Repository:
         with db.get_connection() as conn:
             cursor = conn.cursor()
             if date:
-                cursor.execute('''
-                    UPDATE transactions 
-                    SET qty = ?, price = ?, total_value = ?, date = ?
-                    WHERE id = ?
-                ''', (qty, price, total_value, date, trx_id))
+                cursor.execute('UPDATE transactions SET qty = ?, price = ?, total_value = ?, date = ? WHERE id = ?', (qty, price, total_value, date, trx_id))
             else:
-                cursor.execute('''
-                    UPDATE transactions 
-                    SET qty = ?, price = ?, total_value = ?
-                    WHERE id = ?
-                ''', (qty, price, total_value, trx_id))
+                cursor.execute('UPDATE transactions SET qty = ?, price = ?, total_value = ? WHERE id = ?', (qty, price, total_value, trx_id))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -80,10 +73,9 @@ class Repository:
 
     @staticmethod
     def get_all_transactions_for_report(user_id, end_date=None):
-        """Lấy TẤT CẢ giao dịch sắp xếp ASC để tính toán"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            query = "SELECT * FROM transactions WHERE user_id = ?"
+            query = "SELECT id, date, type, asset_type, ticker, qty, price, total_value, note FROM transactions WHERE user_id = ?"
             params = [user_id]
             if end_date:
                 query += " AND date <= ?"
