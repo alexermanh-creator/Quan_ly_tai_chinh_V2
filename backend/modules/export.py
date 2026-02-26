@@ -1,12 +1,13 @@
+# backend/modules/export.py
 import pandas as pd
 import io
 from datetime import datetime
 import xlsxwriter
-from backend.database import repository
+from backend.database.repository import Repository # Hợp nhất: Import Class chính xác
 
 def generate_excel_report(user_id):
-    # 1. Lấy dữ liệu từ DB (Dùng hàm bọc thép lấy toàn bộ để tính giá vốn)
-    raw_data = repository.get_all_transactions_for_report(user_id)
+    # 1. Gọi hàm thông qua Class (Static Method)
+    raw_data = Repository.get_all_transactions_for_report(user_id)
     
     # 2. Tạo Buffer để lưu file trên RAM
     output = io.BytesIO()
@@ -14,35 +15,46 @@ def generate_excel_report(user_id):
     workbook = writer.book
 
     # 3. Tạo các định dạng (Formatting)
-    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1, 'align': 'center'})
     money_fmt = workbook.add_format({'num_format': '#,##0', 'align': 'right'})
     title_fmt = workbook.add_format({'bold': True, 'font_size': 14, 'color': '#203764'})
 
-    # --- SHEET 3: NHẬT KÝ GIAO DỊCH (RAW DATA) ---
-    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame(columns=['ID', 'Ngày', 'Loại', 'Mã', 'Tiền'])
+    # --- SHEET: NHẬT KÝ GIAO DỊCH (RAW DATA) ---
+    # Chuyển dữ liệu sang DataFrame
+    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame(columns=['id', 'date', 'type', 'ticker', 'total_value'])
+    
+    # Ghi dữ liệu thực tế vào Sheet
     df_tx.to_excel(writer, sheet_name='Raw_Transactions', index=False)
     ws_raw = writer.sheets['Raw_Transactions']
-    ws_raw.freeze_panes(1, 0) # Đóng băng dòng đầu
+    ws_raw.freeze_panes(1, 0)
+    ws_raw.set_column('A:J', 15)
 
-    # --- SHEET 1: DASHBOARD ---
+    # --- SHEET: DASHBOARD ---
     ws_dash = workbook.add_worksheet('📊 Dashboard')
     ws_dash.hide_gridlines(2)
     ws_dash.write('A1', 'BÁO CÁO TÀI CHÍNH THÀNH AN', title_fmt)
+    ws_dash.write('A2', f'Trích xuất: {datetime.now().strftime("%d/%m/%Y %H:%M")}')
     
-    # Giả định data tóm tắt để vẽ biểu đồ (Sếp có thể dùng groupby từ df_tx)
-    summary_data = [['Phân khúc', 'Giá trị'], ['Stock', 60], ['Crypto', 20], ['Khác', 20]]
-    for r, row in enumerate(summary_data):
-        ws_dash.write_row(r + 10, 10, row) # Ghi vào vùng tạm để vẽ chart
+    # 4. Vẽ biểu đồ từ dữ liệu thật
+    if not df_tx.empty and 'asset_type' in df_tx.columns:
+        # Group by để lấy tỷ trọng
+        summary = df_tx.groupby('asset_type')['total_value'].sum().reset_index()
+        
+        # Ghi dữ liệu summary vào vùng tạm (Cột K, L)
+        start_row = 10
+        for i, row in summary.iterrows():
+            ws_dash.write(start_row + i, 10, row['asset_type'])
+            ws_dash.write(start_row + i, 11, row['total_value'])
 
-    # Vẽ Biểu đồ Tròn (Pie Chart)
-    chart = workbook.add_chart({'type': 'pie'})
-    chart.add_series({
-        'name': 'Cơ cấu Tài sản',
-        'categories': "='📊 Dashboard'!$K$12:$K$14",
-        'values':     "='📊 Dashboard'!$L$12:$L$14",
-        'data_labels': {'percentage': True},
-    })
-    ws_dash.insert_chart('A4', chart)
+        # Tạo Biểu đồ Tròn
+        chart = workbook.add_chart({'type': 'pie'})
+        chart.add_series({
+            'name': 'Cơ cấu Tài sản',
+            'categories': ['📊 Dashboard', start_row, 10, start_row + len(summary) - 1, 10],
+            'values':     ['📊 Dashboard', start_row, 11, start_row + len(summary) - 1, 11],
+            'data_labels': {'percentage': True, 'leader_lines': True},
+        })
+        chart.set_title({'name': 'Tỷ trọng Phân bổ Tài sản'})
+        ws_dash.insert_chart('B5', chart)
 
     writer.close()
     output.seek(0)
