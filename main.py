@@ -12,12 +12,14 @@ from backend.modules.dashboard import DashboardModule
 from backend.modules.stock import StockModule
 from backend.modules.crypto import CryptoModule 
 from backend.modules.history import HistoryModule
+from backend.modules.report import ReportModule # Thêm Import Báo Cáo
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
+# --- HỆ THỐNG MENU ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -42,6 +44,14 @@ def get_crypto_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
+# THÊM MỚI: MENU BÁO CÁO 2 DÒNG
+def get_report_menu():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📊 Stock"), KeyboardButton("🪙 Crypto"), KeyboardButton("🥇 Tài sản khác")],
+        [KeyboardButton("🔍 TÌM KIẾM"), KeyboardButton("📥 Xuất Excel"), KeyboardButton("🏠 Trang chủ")]
+    ], resize_keyboard=True)
+
+# --- XỬ LÝ CALLBACK ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -60,8 +70,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_html("🔍 <b>TÌM KIẾM LỊCH SỬ</b>\nCEO hãy gõ mã tài sản cần tìm (VD: <code>VPB</code>, <code>BTC</code>)...")
 
     elif data == "go_home":
-        # Xóa trạng thái Edit nếu có
         if 'edit_trx' in context.user_data: del context.user_data['edit_trx']
+        context.user_data['current_menu'] = 'HOME'
         await query.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
 
     elif data.startswith("view_"):
@@ -70,12 +80,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content, kb = hist.get_detail_view(trx_id)
         await query.edit_message_text(content, reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
-    # --- CHỨC NĂNG SỬA: ĐƯA BOT VÀO TRẠNG THÁI CHỜ ---
     elif data.startswith("edit_"):
         parts = data.split("_")
-        field, trx_id = parts[1], parts[-1] # field: qty, price, date
+        field, trx_id = parts[1], parts[-1]
         context.user_data['edit_trx'] = {'id': trx_id, 'field': field}
-        
         prompts = {
             'qty': "🔢 Vui lòng nhập <b>SỐ LƯỢNG</b> mới:",
             'price': "💲 Vui lòng nhập <b>GIÁ</b> mới:",
@@ -96,7 +104,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_transaction_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    # Khi bấm /1, xóa các lệnh chờ sửa trước đó
     if 'edit_trx' in context.user_data: del context.user_data['edit_trx']
     trx_id = update.message.text[1:]
     content, kb = HistoryModule(update.effective_user.id).get_detail_view(trx_id)
@@ -104,6 +111,7 @@ async def handle_transaction_click(update: Update, context: ContextTypes.DEFAULT
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
+    context.user_data['current_menu'] = 'HOME'
     await update.message.reply_text("🌟 <b>Hệ điều hành tài chính v2.0</b>", reply_markup=get_ceo_menu(), parse_mode=constants.ParseMode.HTML)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,48 +119,88 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
 
-    # --- KIỂM TRA TRẠNG THÁI "ĐANG SỬA GIAO DỊCH" TỪ BOT ---
+    # --- KIỂM TRA TRẠNG THÁI "ĐANG SỬA GIAO DỊCH" ---
     if 'edit_trx' in context.user_data:
         edit_data = context.user_data['edit_trx']
         trx_id, field = edit_data['id'], edit_data['field']
         trx = repo.get_transaction_by_id(trx_id)
-        
         if not trx:
             del context.user_data['edit_trx']
             await update.message.reply_text("❌ Giao dịch không tồn tại."); return
-
         try:
-            # Thuật toán tính toán lại hệ số nhân tự động
             rate_factor = 1
             if trx['qty'] > 0 and trx['price'] > 0:
                 rate_factor = trx['total_value'] / (trx['qty'] * trx['price'])
-                
             new_qty, new_price, new_date = trx['qty'], trx['price'], trx['date']
-            
-            if field == 'qty':
-                new_qty = float(text.replace(',', '.'))
-            elif field == 'price':
-                new_price = float(text.replace(',', '.'))
+            if field == 'qty': new_qty = float(text.replace(',', '.'))
+            elif field == 'price': new_price = float(text.replace(',', '.'))
             elif field == 'date':
                 if not re.match(r'^\d{4}-\d{2}-\d{2}$', text.strip()):
                     await update.message.reply_text("❌ Sai định dạng! Hãy nhập: YYYY-MM-DD"); return
                 time_part = trx['date'].split()[1] if len(trx['date'].split()) > 1 else "00:00:00"
                 new_date = f"{text.strip()} {time_part}"
-
             new_total = abs(new_qty) * new_price * rate_factor
             repo.update_transaction(trx_id, new_qty, new_price, new_total, new_date)
             del context.user_data['edit_trx']
-            
             content, kb = HistoryModule(user_id).get_detail_view(trx_id)
             await update.message.reply_html(f"✅ <b>ĐÃ CẬP NHẬT THÀNH CÔNG!</b>\n\n{content}", reply_markup=kb)
         except ValueError:
             await update.message.reply_text("❌ Vui lòng nhập số hợp lệ.")
         return
 
-    # --- NHÓM 1: EXACT MATCH ---
+    # --- NHÓM 1: MENU CHÍNH & ĐIỀU HƯỚNG ---
+    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]: 
+        context.user_data['current_menu'] = 'HOME'
+        if 'report_search' in context.user_data: del context.user_data['report_search']
+        await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
+        return
+
+    # KÍCH HOẠT MODULE BÁO CÁO
+    if text == "📊 Báo cáo":
+        context.user_data['current_menu'] = 'REPORT'
+        await update.message.reply_html(ReportModule(user_id).get_overview_report(), reply_markup=get_report_menu())
+        return
+
+    if text == "📊 Stock":
+        context.user_data['current_menu'] = 'REPORT'
+        await update.message.reply_html(ReportModule(user_id).get_category_report('STOCK'), reply_markup=get_report_menu())
+        return
+
+    if text == "🪙 Crypto":
+        # Check xem CEO đang ở phòng Báo Cáo hay phòng Chính
+        if context.user_data.get('current_menu') == 'REPORT':
+            await update.message.reply_html(ReportModule(user_id).get_category_report('CRYPTO'), reply_markup=get_report_menu())
+        else:
+            context.user_data['current_menu'] = 'CRYPTO'
+            await update.message.reply_html(CryptoModule(user_id).run(), reply_markup=get_crypto_menu())
+        return
+
+    if text == "🥇 Tài sản khác":
+        if context.user_data.get('current_menu') == 'REPORT':
+            await update.message.reply_html(ReportModule(user_id).get_category_report('OTHER'), reply_markup=get_report_menu())
+        else:
+            await update.message.reply_text("Tính năng quản lý Tài sản khác đang phát triển.")
+        return
+
+    if text == "🔍 TÌM KIẾM":
+        context.user_data['report_search'] = True
+        await update.message.reply_html("🔍 <b>NHẬP MÃ TÀI SẢN CẦN PHÂN TÍCH:</b>\nVí dụ: <code>FPT</code>, <code>BTC</code>...", reply_markup=get_report_menu())
+        return
+
+    if text in ["📥 Xuất Excel", "📥 EXPORT/IMPORT"]:
+        kb_return = get_report_menu() if text == "📥 Xuất Excel" else get_ceo_menu()
+        await update.message.reply_html("⚠️ <b>Tính năng đang nâng cấp:</b>\nCTO sẽ cập nhật xuất Excel ở bản sau. Chờ nhé CEO!", reply_markup=kb_return)
+        return
+
+    # XỬ LÝ NHẬP TÊN MÃ KHI ĐANG Ở TRẠNG THÁI TÌM KIẾM BÁO CÁO
+    if context.user_data.get('report_search'):
+        ticker = text.strip().upper()
+        del context.user_data['report_search']
+        await update.message.reply_html(ReportModule(user_id).get_ticker_detail_report(ticker), reply_markup=get_report_menu())
+        return
+
+    # CÁC LỆNH CŨ GIỮ NGUYÊN
     if text == "📊 Chứng Khoán": await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
-    if text == "🪙 Crypto": await update.message.reply_html(CryptoModule(user_id).run(), reply_markup=get_crypto_menu()); return
-    if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]: await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu()); return
     if text == "📜 Lịch sử":
         content, kb = HistoryModule(user_id).run()
         await update.message.reply_html(content, reply_markup=kb); return
@@ -169,7 +217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔄 Làm mới":
         await update.message.reply_html(f"🔄 <b>Làm mới:</b>\n\n{DashboardModule(user_id).run()}"); return
 
-    # --- NHÓM 2: PREFIX & TÌM KIẾM ---
+    # --- NHÓM 2: PREFIX & TÌM KIẾM LỊCH SỬ NHANH ---
     if text.lower().startswith("xoa "):
         ticker = text.split()[1].upper()
         with db.get_connection() as conn:
