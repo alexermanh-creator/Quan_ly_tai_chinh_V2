@@ -58,6 +58,14 @@ class Repository:
             return cursor.rowcount > 0
 
     @staticmethod
+    def undo_last_transaction(user_id):
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM transactions WHERE id = (SELECT MAX(id) FROM transactions WHERE user_id = ?)', (user_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     def get_available_cash(user_id):
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -73,13 +81,17 @@ class Repository:
 
     @staticmethod
     def get_all_transactions_for_report(user_id, end_date=None):
+        """Hợp nhất: Loại bỏ cột 'note' để tránh lỗi DB"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            query = "SELECT id, date, type, asset_type, ticker, qty, price, total_value, note FROM transactions WHERE user_id = ?"
+            # Liệt kê tường minh các cột hiện có
+            query = "SELECT id, user_id, ticker, asset_type, qty, price, total_value, type, date FROM transactions WHERE user_id = ?"
             params = [user_id]
+
             if end_date:
                 query += " AND date <= ?"
                 params.append(f"{end_date} 23:59:59")
+
             query += " ORDER BY date ASC" 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
