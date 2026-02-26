@@ -14,7 +14,6 @@ from backend.modules.stock import StockModule
 from backend.modules.crypto import CryptoModule 
 from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
-# --- Hợp nhất: Thêm module xuất Excel ---
 from backend.modules.export import generate_excel_report
 
 load_dotenv()
@@ -260,17 +259,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
         return
 
-    # --- Hợp nhất: Xử lý Xuất Excel ---
+    # --- Hợp nhất: Xử lý Xuất Excel Pro ---
     if text in ["📥 Xuất Excel", "📥 EXPORT/IMPORT"]:
         await update.message.reply_html("⏳ <b>Đang tổng hợp dữ liệu và vẽ biểu đồ...</b>\nVui lòng chờ trong giây lát.")
         try:
             excel_file = generate_excel_report(user_id)
-            file_name = f"ThanhAn_Report_{datetime.datetime.now().strftime('%d%m%Y')}.xlsx"
+            date_str = datetime.datetime.now().strftime('%d%m%Y')
+            file_name = f"Bao_Cao_Tai_Chinh_{date_str}.xlsx"
             await context.bot.send_document(
                 chat_id=user_id,
                 document=excel_file,
                 filename=file_name,
-                caption="📊 <b>BÁO CÁO TÀI CHÍNH THÀNH AN</b>\n<i>Đã bao gồm Dashboard, Biểu đồ và Lịch sử giao dịch.</i>",
+                caption="📊 <b>BÁO CÁO TÀI CHÍNH CHI TIẾT</b>\n<i>Đã bao gồm Dashboard, Biểu đồ và Lịch sử giao dịch.</i>",
                 parse_mode=constants.ParseMode.HTML
             )
         except Exception as e:
