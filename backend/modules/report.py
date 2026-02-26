@@ -7,7 +7,7 @@ from backend.database.repository import Repository
 try:
     import pandas as pd
 except ImportError:
-    pd = None  # Sẽ yêu cầu cài đặt pandas và openpyxl để xuất Excel
+    pd = None
 
 class ReportModule(BaseModule):
     def __init__(self, user_id):
@@ -21,31 +21,29 @@ class ReportModule(BaseModule):
         return f"{sign}{value:,.0f}đ".replace(',', '.')
 
     def create_progress_bar(self, percentage, color_emoji):
-        """VẼ THANH PROGRESS BAR: Đã fix lỗi làm tròn thông minh"""
+        """Vẽ thanh Progress Bar bằng Emoji"""
         if percentage <= 0: return f"[{'⚪' * 10}]"
         filled = round(percentage / 10)
-        # Nếu có phần trăm nhưng quá nhỏ để làm tròn thành 1, ép = 1 chấm màu
         if filled == 0 and percentage > 0: filled = 1
         filled = min(10, filled)
         empty = 10 - filled
         return f"[{color_emoji * filled}{'⚪' * empty}]"
 
-    def calculate_portfolio(self, start_date=None, end_date=None, asset_filter=None):
-        """CỖ MÁY TÍNH TOÁN LÕI"""
-        transactions = self.repo.get_transactions_in_period(self.user_id, start_date, end_date, asset_filter)
+    def calculate_portfolio(self):
+        """CỖ MÁY TÍNH TOÁN LÕI (Đã gọi đúng hàm bọc thép)"""
+        # SỬA LỖI Ở ĐÂY: Gọi get_all_transactions_for_report thay vì hàm cũ
+        transactions = self.repo.get_all_transactions_for_report(self.user_id)
         current_prices = self.repo.get_current_prices()
 
         data = {
             'cash_available': 0, 'total_in': 0, 'total_out': 0,
             'total_buy': 0, 'total_sell': 0,
             'assets': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
-            # BỔ SUNG: Rổ đếm Nạp/Rút riêng cho từng danh mục
             'cat_in': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
             'cat_out': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
             'tickers': {}
         }
 
-        # Thuật toán tính Giá vốn trung bình và Realized PnL
         for trx in transactions:
             t = trx['ticker']
             a_type = trx['asset_type'] if trx['asset_type'] in ['STOCK', 'CRYPTO'] else 'OTHER'
@@ -62,11 +60,11 @@ class ReportModule(BaseModule):
             if trx['type'] in ['IN', 'DEPOSIT']:
                 data['total_in'] += trx['total_value']
                 data['cash_available'] += trx['total_value']
-                data['cat_in'][a_type] += trx['total_value'] # Tính nạp riêng
+                data['cat_in'][a_type] += trx['total_value']
             elif trx['type'] in ['OUT', 'WITHDRAW']:
                 data['total_out'] += trx['total_value']
                 data['cash_available'] -= trx['total_value']
-                data['cat_out'][a_type] += trx['total_value'] # Tính rút riêng
+                data['cat_out'][a_type] += trx['total_value']
             elif trx['type'] == 'BUY':
                 data['cash_available'] -= trx['total_value']
                 data['total_buy'] += trx['total_value']
@@ -91,7 +89,6 @@ class ReportModule(BaseModule):
                 data['cash_available'] += trx['total_value']
                 tkr['dividends'] += trx['total_value']
 
-        # Tính toán Giá trị thị trường (Market Value) và Unrealized PnL
         total_market_value = 0
         total_realized = 0
         total_unrealized = 0
@@ -123,7 +120,6 @@ class ReportModule(BaseModule):
         return data
 
     def get_overview_report(self):
-        """TẦNG 1: Báo cáo Tổng quan Toàn thời gian"""
         d = self.calculate_portfolio()
         now = datetime.now().strftime("%d/%m/%Y | %H:%M")
         
@@ -168,9 +164,8 @@ class ReportModule(BaseModule):
 ━━━━━━━━━━━━━━━━━━━"""
         return html
 
-    def get_category_report(self, asset_type, start_date=None, end_date=None, label_time="Toàn thời gian"):
-        """TẦNG 2: Báo cáo theo Danh mục (Stock/Crypto)"""
-        d = self.calculate_portfolio(start_date, end_date, asset_filter=asset_type)
+    def get_category_report(self, asset_type, label_time="Toàn thời gian"):
+        d = self.calculate_portfolio()
         
         cat_tickers = {k: v for k, v in d['tickers'].items() if v['type'] == asset_type}
         sorted_tickers = sorted(cat_tickers.items(), key=lambda x: x[1]['realized_pnl'], reverse=True)
@@ -183,17 +178,13 @@ class ReportModule(BaseModule):
 
         realized_only = sum(v['realized_pnl'] for v in cat_tickers.values())
         
-        # BỔ SUNG: Gọi đúng số liệu nạp rút của riêng danh mục này
         c_in = d['cat_in'][asset_type]
         c_out = d['cat_out'][asset_type]
 
-        # Đếm tổng mua bán
-        cat_total_buy = sum(t['total_buy_vol'] * t['avg_cost'] for t in cat_tickers.values() if t['qty'] > 0) # Xấp xỉ đơn giản
-        
-        # Để lấy tổng mua/bán chính xác, cần query lại. Ở đây lấy tổng từ repo cho nhanh:
-        transactions = self.repo.get_transactions_in_period(self.user_id, start_date, end_date, asset_type)
-        cat_total_buy = sum(t['total_value'] for t in transactions if t['type'] == 'BUY')
-        cat_total_sell = sum(t['total_value'] for t in transactions if t['type'] == 'SELL')
+        # SỬA LỖI Ở ĐÂY: Gọi đúng hàm bọc thép
+        transactions = self.repo.get_all_transactions_for_report(self.user_id)
+        cat_total_buy = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'BUY')
+        cat_total_sell = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'SELL')
 
         name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
 
@@ -219,7 +210,6 @@ class ReportModule(BaseModule):
         return html
 
     def get_ticker_detail_report(self, ticker):
-        """TẦNG 3: Báo cáo Chi tiết 1 mã (Drill-down)"""
         d = self.calculate_portfolio()
         ticker = ticker.upper()
         
@@ -248,7 +238,6 @@ class ReportModule(BaseModule):
         return html
 
     def export_excel_report(self):
-        """Tạo file Excel Báo Cáo Tài Chính (Cần thư viện pandas)"""
         if pd is None:
             return None, "❌ Cần cài đặt pandas để xuất Excel (pip install pandas openpyxl)"
             
