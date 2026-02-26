@@ -20,7 +20,6 @@ class ReportModule(BaseModule):
         sign = "+" if is_pnl and value > 0 else ""
         abs_val = abs(value)
         
-        # Rút gọn số lớn thành Tỷ và Triệu
         if abs_val >= 1_000_000_000:
             formatted = f"{abs_val / 1_000_000_000:.2f}".rstrip('0').rstrip('.')
             formatted = formatted.replace('.', ',') + " Tỷ"
@@ -165,7 +164,7 @@ class ReportModule(BaseModule):
             realized_only = sum(t.get('pnl_generated', 0) for t in period_txs if t['type'] in ['SELL', 'CASH_DIVIDEND'])
 
             name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
-            return f"""📊 <b>BÁO CÁO {name} ({label_time})</b>\n━━━━━━━━━━━━━━━━━━━\n🌊 Dòng tiền ròng: {self.format_currency(c_in - c_out, True)}\n🛒 Hoạt động: Mua {len([t for t in period_txs if t['type']=='BUY'])} | Bán {len([t for t in period_txs if t['type']=='SELL'])}\n📈 Lãi/Lỗ đã chốt: <b>{self.format_currency(realized_only, True)}</b>\n━━━━━━━━━━━━━━━━━━━"""
+            return f"""📊 <b>BÁO CÁO {name} ({label_time})</b>\n━━━━━━━━━━━━━━━━━━━\n🌊 Dòng tiền ròng: {self.format_currency(c_in - c_out, True)}\n📈 Lãi/Lỗ đã chốt: <b>{self.format_currency(realized_only, True)}</b>\n━━━━━━━━━━━━━━━━━━━"""
         except Exception as e:
             return f"❌ Lỗi báo cáo danh mục: {str(e)}"
 
@@ -182,5 +181,5 @@ class ReportModule(BaseModule):
             return f"❌ Lỗi báo cáo chi tiết: {str(e)}"
 
     def export_excel_report(self):
-        """Hàm này hiện đã được thay thế bởi module export.py chuyên dụng"""
-        return None, "Vui lòng sử dụng tính năng 'Xuất Excel' từ Menu chính."
+        """Vui lòng sử dụng tính năng 'Xuất Excel' từ Menu chính."""
+        return None, "Sử dụng Menu chính."
