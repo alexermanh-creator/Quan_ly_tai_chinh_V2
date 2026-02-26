@@ -14,6 +14,8 @@ from backend.modules.stock import StockModule
 from backend.modules.crypto import CryptoModule 
 from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
+# --- Hợp nhất: Thêm module xuất Excel ---
+from backend.modules.export import generate_excel_report
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -67,7 +69,7 @@ def get_time_filter_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📅 7 Ngày qua"), KeyboardButton("📅 30 Ngày qua")],
         [KeyboardButton("📅 3 Tháng"), KeyboardButton("📅 1 Năm")],
-        [KeyboardButton("🗓 Tùy chọn"), KeyboardButton("♾ Toàn thời gian")], # ĐÃ MỞ KHÓA NÚT NÀY
+        [KeyboardButton("🗓 Tùy chọn"), KeyboardButton("♾ Toàn thời gian")],
         [KeyboardButton("⬅️ Menu Báo Cáo")]
     ], resize_keyboard=True)
 
@@ -194,12 +196,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html("🔍 <b>NHẬP MÃ TÀI SẢN CẦN PHÂN TÍCH:</b>\nVí dụ: <code>FPT</code>, <code>BTC</code>...", reply_markup=get_detail_report_menu())
         return
 
-    # KÍCH HOẠT MENU THỜI GIAN
     if text == "📅 Chọn thời gian":
         await update.message.reply_html("⏳ <b>CHỌN KHOẢNG THỜI GIAN:</b>\nNgài muốn xem báo cáo biến động trong bao lâu?", reply_markup=get_time_filter_menu())
         return
 
-    # LUỒNG XỬ LÝ NÚT "TÙY CHỌN"
     if text == "🗓 Tùy chọn":
         context.user_data['report_custom_time'] = True
         await update.message.reply_html(
@@ -208,7 +208,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # BỘ LỌC THỜI GIAN CỐ ĐỊNH
     time_filters = ["📅 7 Ngày qua", "📅 30 Ngày qua", "📅 3 Tháng", "📅 1 Năm", "♾ Toàn thời gian"]
     if text in time_filters:
         cat = context.user_data.get('report_category', 'STOCK')
@@ -227,7 +226,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # HỨNG DỮ LIỆU TỪ TRẠNG THÁI "TÙY CHỌN" HOẶC "TÌM KIẾM"
     if context.user_data.get('report_custom_time'):
         match = re.match(r'^(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})$', text.strip())
         if match:
@@ -262,9 +260,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
         return
 
+    # --- Hợp nhất: Xử lý Xuất Excel ---
     if text in ["📥 Xuất Excel", "📥 EXPORT/IMPORT"]:
-        kb_return = get_report_menu() if text == "📥 Xuất Excel" else get_ceo_menu()
-        await update.message.reply_html("⚠️ <b>Tính năng đang nâng cấp:</b>\nCTO sẽ cập nhật xuất Excel ở bản sau. Chờ nhé CEO!", reply_markup=kb_return)
+        await update.message.reply_html("⏳ <b>Đang tổng hợp dữ liệu và vẽ biểu đồ...</b>\nVui lòng chờ trong giây lát.")
+        try:
+            excel_file = generate_excel_report(user_id)
+            file_name = f"ThanhAn_Report_{datetime.datetime.now().strftime('%d%m%Y')}.xlsx"
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=excel_file,
+                filename=file_name,
+                caption="📊 <b>BÁO CÁO TÀI CHÍNH THÀNH AN</b>\n<i>Đã bao gồm Dashboard, Biểu đồ và Lịch sử giao dịch.</i>",
+                parse_mode=constants.ParseMode.HTML
+            )
+        except Exception as e:
+            print(f"Lỗi xuất Excel: {e}")
+            await update.message.reply_html("❌ <b>LỖI:</b> Không thể tạo báo cáo lúc này.")
         return
 
     if text == "📊 Chứng Khoán": await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
