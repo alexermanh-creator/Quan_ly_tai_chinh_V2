@@ -42,8 +42,10 @@ class ReportModule(BaseModule):
         return f"[{color_emoji * filled}{'⚪' * empty}]"
 
     def calculate_portfolio(self):
-        transactions = self.repo.get_all_transactions_for_report(self.user_id)
-        current_prices = self.repo.get_current_prices()
+        """Cỗ máy tính toán lõi trả về (data_summary, all_transactions)"""
+        # Sử dụng đúng hàm bọc thép từ Repository (Static Method)
+        transactions = Repository.get_all_transactions_for_report(self.user_id)
+        current_prices = Repository.get_current_prices()
 
         data = {
             'cash_available': 0, 'total_in': 0, 'total_out': 0,
@@ -129,159 +131,56 @@ class ReportModule(BaseModule):
         return data, transactions
 
     def get_overview_report(self):
-        d, _ = self.calculate_portfolio()
-        now = datetime.now().strftime("%d/%m/%Y | %H:%M")
-        
-        nw = d['net_worth'] if d['net_worth'] > 0 else 1
-        pct_stock = (d['assets']['STOCK'] / nw) * 100
-        pct_crypto = (d['assets']['CRYPTO'] / nw) * 100
-        pct_other = (d['assets']['OTHER'] / nw) * 100
+        try:
+            d, _ = self.calculate_portfolio()
+            now = datetime.now().strftime("%d/%m/%Y | %H:%M")
+            
+            nw = d['net_worth'] if d['net_worth'] > 0 else 1
+            pct_stock = (d['assets']['STOCK'] / nw) * 100
+            pct_crypto = (d['assets']['CRYPTO'] / nw) * 100
+            pct_other = (d['assets']['OTHER'] / nw) * 100
 
-        sorted_tickers = sorted(d['tickers'].items(), key=lambda x: x[1]['total_pnl'], reverse=True)
-        top_winners = [f"{k} (+{self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] > 0][:2]
-        top_losers = [f"{k} ({self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] < 0][::-1][:2]
+            sorted_tickers = sorted(d['tickers'].items(), key=lambda x: x[1]['total_pnl'], reverse=True)
+            top_winners = [f"{k} (+{self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] > 0][:2]
+            top_losers = [f"{k} ({self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] < 0][::-1][:2]
 
-        win_str = " | ".join(top_winners) if top_winners else "Chưa có"
-        lose_str = " | ".join(top_losers) if top_losers else "Chưa có"
+            win_str = " | ".join(top_winners) if top_winners else "Chưa có"
+            lose_str = " | ".join(top_losers) if top_losers else "Chưa có"
 
-        html = f"""📊 <b>BÁO CÁO TÀI CHÍNH TỔNG QUAN (Toàn thời gian)</b>
-📅 {now}
-━━━━━━━━━━━━━━━━━━━ 
-💰 <b>TỔNG TÀI SẢN:</b>       <b>{self.format_currency(d['net_worth'])}</b> 
-💵 Tiền mặt:    {self.format_currency(d['cash_available'])} 
-📈 Đang đầu tư:        {self.format_currency(d['total_market_value'])}
-
-🥧 <b>PHÂN BỔ DANH MỤC:</b>
-• 📊 Stock ({pct_stock:.1f}%) 
-  {self.create_progress_bar(pct_stock, '🔵')}  {self.format_currency(d['assets']['STOCK'])} 
-• 🪙 Crypto ({pct_crypto:.1f}%) 
-  {self.create_progress_bar(pct_crypto, '🟡')}  {self.format_currency(d['assets']['CRYPTO'])} 
-• 🥇 Khác ({pct_other:.1f}%) 
-  {self.create_progress_bar(pct_other, '🟢')}  {self.format_currency(d['assets']['OTHER'])}
-
-🚀 <b>HIỆU SUẤT (PERFORMANCE):</b> 
-• 💼 Vốn ròng: {self.format_currency(d['net_invested'])} 
-• 📈 Tổng Lãi/Lỗ:       <b>{self.format_currency(d['total_pnl'], True)}</b> 
-• 🎯 ROI:         <b>{'+' if d['roi']>0 else ''}{d['roi']:.1f}%</b>
-
-🏆 Top Lãi: {win_str} 
-⚠️ Top Lỗ:  {lose_str}
-
-💸 <b>DÒNG TIỀN (ALL-TIME):</b> 
-⬆️ Tổng nạp:           {self.format_currency(d['total_in'])} 
-⬇️ Tổng rút:             {self.format_currency(d['total_out'])} 
-━━━━━━━━━━━━━━━━━━━"""
-        return html
+            return f"""📊 <b>BÁO CÁO TÀI CHÍNH TỔNG QUAN</b>\n📅 {now}\n━━━━━━━━━━━━━━━━━━━\n💰 <b>TỔNG TÀI SẢN: {self.format_currency(d['net_worth'])}</b>\n💵 Tiền mặt: {self.format_currency(d['cash_available'])}\n📈 Đang đầu tư: {self.format_currency(d['total_market_value'])}\n\n🥧 <b>PHÂN BỔ DANH MỤC:</b>\n• 📊 Stock ({pct_stock:.1f}%) {self.create_progress_bar(pct_stock, '🔵')}\n• 🪙 Crypto ({pct_crypto:.1f}%) {self.create_progress_bar(pct_crypto, '🟡')}\n• 🥇 Khác ({pct_other:.1f}%) {self.create_progress_bar(pct_other, '🟢')}\n\n🚀 <b>HIỆU SUẤT (PERFORMANCE):</b>\n• 💼 Vốn ròng: {self.format_currency(d['net_invested'])}\n• 📈 Tổng Lãi/Lỗ: <b>{self.format_currency(d['total_pnl'], True)}</b>\n• 🎯 ROI: <b>{d['roi']:.1f}%</b>\n\n🏆 Top Lãi: {win_str}\n⚠️ Top Lỗ: {lose_str}\n━━━━━━━━━━━━━━━━━━━"""
+        except Exception as e:
+            return f"❌ Lỗi báo cáo tổng quan: {str(e)}"
 
     def get_category_report(self, asset_type, start_date=None, end_date=None, label_time="Toàn thời gian"):
-        d, all_transactions = self.calculate_portfolio()
-        
-        period_txs = [t for t in all_transactions if t['asset_type'] == asset_type]
-        if start_date:
-            period_txs = [t for t in period_txs if t['date'] >= start_date]
-        if end_date:
-            period_txs = [t for t in period_txs if t['date'] <= end_date + " 23:59:59"]
+        try:
+            d, all_transactions = self.calculate_portfolio()
+            period_txs = [t for t in all_transactions if t['asset_type'] == asset_type]
+            if start_date:
+                period_txs = [t for t in period_txs if t['date'] >= start_date]
+            if end_date:
+                period_txs = [t for t in period_txs if t['date'] <= end_date + " 23:59:59"]
 
-        c_in = sum(t['total_value'] for t in period_txs if t['type'] in ['IN', 'DEPOSIT'])
-        c_out = sum(t['total_value'] for t in period_txs if t['type'] in ['OUT', 'WITHDRAW'])
-        cat_total_buy = sum(t['total_value'] for t in period_txs if t['type'] == 'BUY')
-        cat_total_sell = sum(t['total_value'] for t in period_txs if t['type'] == 'SELL')
-        realized_only = sum(t.get('pnl_generated', 0) for t in period_txs if t['type'] in ['SELL', 'CASH_DIVIDEND'])
+            c_in = sum(t['total_value'] for t in period_txs if t['type'] in ['IN', 'DEPOSIT'])
+            c_out = sum(t['total_value'] for t in period_txs if t['type'] in ['OUT', 'WITHDRAW'])
+            realized_only = sum(t.get('pnl_generated', 0) for t in period_txs if t['type'] in ['SELL', 'CASH_DIVIDEND'])
 
-        ticker_period_pnl = {}
-        for t in period_txs:
-            if t['type'] in ['SELL', 'CASH_DIVIDEND']:
-                ticker_period_pnl[t['ticker']] = ticker_period_pnl.get(t['ticker'], 0) + t.get('pnl_generated', 0)
-                
-        sorted_period_tickers = sorted(ticker_period_pnl.items(), key=lambda x: x[1], reverse=True)
-        win_list = [f"   {i+1}. {k}: {self.format_currency(v, True)}" for i, (k, v) in enumerate(sorted_period_tickers) if v > 0][:3]
-        lose_list = [f"   {i+1}. {k}: {self.format_currency(v, True)}" for i, (k, v) in enumerate(sorted_period_tickers[::-1]) if v < 0][:3]
-
-        win_str = "\n".join(win_list) if win_list else "   Chưa có chốt lời"
-        lose_str = "\n".join(lose_list) if lose_list else "   Chưa có cắt lỗ"
-
-        name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
-
-        html = f"""📊 <b>BÁO CÁO {name} ({label_time})</b> 
-━━━━━━━━━━━━━━━━━━━ 
-💸 <b>DÒNG TIỀN TRONG KỲ:</b> 
-⬆️ Thực nạp:            {self.format_currency(c_in, True)} 
-⬇️ Thực rút:             {self.format_currency(-c_out, True)} 
-🌊 Dòng tiền ròng:      <b>{self.format_currency(c_in - c_out, True)}</b>
-
-🔄 <b>HOẠT ĐỘNG GIAO DỊCH:</b> 
-🛒 Tổng mua:             {self.format_currency(cat_total_buy)} 
-💰 Tổng bán:             {self.format_currency(cat_total_sell)}
-
-🚀 <b>HIỆU SUẤT TRONG KỲ (P&L):</b> 
-📈 Lãi/Lỗ (Đã chốt):     <b>{self.format_currency(realized_only, True)}</b>
-
-🏆 <b>Top Đóng Góp:</b> 
-{win_str} 
-⚠️ <b>Top Kéo Lùi:</b> 
-{lose_str} 
-━━━━━━━━━━━━━━━━━━━"""
-        return html
+            name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
+            return f"""📊 <b>BÁO CÁO {name} ({label_time})</b>\n━━━━━━━━━━━━━━━━━━━\n🌊 Dòng tiền ròng: {self.format_currency(c_in - c_out, True)}\n🛒 Hoạt động: Mua {len([t for t in period_txs if t['type']=='BUY'])} | Bán {len([t for t in period_txs if t['type']=='SELL'])}\n📈 Lãi/Lỗ đã chốt: <b>{self.format_currency(realized_only, True)}</b>\n━━━━━━━━━━━━━━━━━━━"""
+        except Exception as e:
+            return f"❌ Lỗi báo cáo danh mục: {str(e)}"
 
     def get_ticker_detail_report(self, ticker):
-        d, _ = self.calculate_portfolio()
-        ticker = ticker.upper()
-        
-        if ticker not in d['tickers']:
-            return f"❌ Không tìm thấy dữ liệu giao dịch cho mã <b>{ticker}</b>."
-            
-        t = d['tickers'][ticker]
-        unrealized_pct = (t['unrealized_pnl'] / (t['qty'] * t['avg_cost']) * 100) if t['qty'] > 0 and t['avg_cost'] > 0 else 0
-
-        html = f"""🔎 <b>PHÂN TÍCH CHI TIẾT MÃ: {ticker}</b> 
-━━━━━━━━━━━━━━━━━━━ 
-📦 <b>Trạng thái hiện tại:</b> 
-• Đang nắm giữ: {t['qty']:,.0f} 
-• Giá vốn TB: {t['avg_cost']:,.0f}đ 
-• Giá hiện tại: {t['current_price']:,.0f}đ 
-• Lãi chưa chốt: <b>{self.format_currency(t['unrealized_pnl'], True)} ({'+' if unrealized_pct>0 else ''}{unrealized_pct:.1f}%)</b>
-
-📜 <b>Thống kê Lịch sử (All-time):</b> 
-• Tổng KL Mua: {t['total_buy_vol']:,.0f} 
-• Tổng KL Bán: {t['total_sell_vol']:,.0f} 
-• Lãi đã chốt (Realized): {self.format_currency(t['realized_pnl'], True)} 
-• Cổ tức/Airdrop: {self.format_currency(t['dividends'])}
-
-💰 <b>TỔNG LỢI NHUẬN TỪ {ticker}: {self.format_currency(t['total_pnl'], True)}</b> 
-━━━━━━━━━━━━━━━━━━━"""
-        return html
+        try:
+            d, _ = self.calculate_portfolio()
+            ticker = ticker.upper()
+            if ticker not in d['tickers']:
+                return f"❌ Không tìm thấy dữ liệu cho mã <b>{ticker}</b>."
+            t = d['tickers'][ticker]
+            unrealized_pct = (t['unrealized_pnl'] / (t['qty'] * t['avg_cost']) * 100) if t['qty'] > 0 and t['avg_cost'] > 0 else 0
+            return f"""🔎 <b>CHI TIẾT MÃ: {ticker}</b>\n━━━━━━━━━━━━━━━━━━━\n📦 Đang giữ: {t['qty']:,.0f}\n💰 Vốn TB: {t['avg_cost']:,.0f}đ\n📈 Lãi chưa chốt: <b>{self.format_currency(t['unrealized_pnl'], True)} ({unrealized_pct:.1f}%)</b>\n🏆 Tổng lợi nhuận: {self.format_currency(t['total_pnl'], True)}\n━━━━━━━━━━━━━━━━━━━"""
+        except Exception as e:
+            return f"❌ Lỗi báo cáo chi tiết: {str(e)}"
 
     def export_excel_report(self):
-        if pd is None:
-            return None, "❌ Cần cài đặt pandas để xuất Excel (pip install pandas openpyxl)"
-            
-        d, _ = self.calculate_portfolio()
-        
-        overview_data = {
-            'Chỉ số': ['Tổng Tài Sản', 'Tiền mặt', 'Đang đầu tư', 'Tổng Nạp', 'Tổng Rút', 'Vốn Ròng', 'Tổng Lãi/Lỗ'],
-            'Giá trị (VNĐ)': [d['net_worth'], d['cash_available'], d['total_market_value'], d['total_in'], d['total_out'], d['net_invested'], d['total_pnl']]
-        }
-        df_overview = pd.DataFrame(overview_data)
-
-        tickers_list = []
-        for k, v in d['tickers'].items():
-            tickers_list.append({
-                'Mã': k,
-                'Phân loại': v['type'],
-                'Số lượng đang giữ': v['qty'],
-                'Giá vốn TB': v['avg_cost'],
-                'Giá hiện tại': v['current_price'],
-                'Lãi/Lỗ đã chốt': v['realized_pnl'],
-                'Lãi/Lỗ đang gồng': v['unrealized_pnl'],
-                'Tổng Lợi Nhuận': v['total_pnl']
-            })
-        df_tickers = pd.DataFrame(tickers_list) if tickers_list else pd.DataFrame(columns=['Mã', 'Phân loại', 'Số lượng đang giữ'])
-
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_overview.to_excel(writer, sheet_name='Tổng Quan', index=False)
-            df_tickers.to_excel(writer, sheet_name='Chi Tiết Danh Mục', index=False)
-        
-        output.seek(0)
-        filename = f"Bao_Cao_Tai_Chinh_{datetime.now().strftime('%d%m%Y')}.xlsx"
-        return output, filename
+        """Hàm này hiện đã được thay thế bởi module export.py chuyên dụng"""
+        return None, "Vui lòng sử dụng tính năng 'Xuất Excel' từ Menu chính."
