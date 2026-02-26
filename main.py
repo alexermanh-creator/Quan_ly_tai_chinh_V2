@@ -1,6 +1,7 @@
 # main.py
 import os
 import re
+import datetime
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, constants, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -19,7 +20,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", 0))
 repo = Repository()
 
-# --- HỆ THỐNG MENU CƠ BẢN ---
+# --- HỆ THỐNG MENU ---
 def get_ceo_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("💼 Tài sản của bạn")],
@@ -44,7 +45,6 @@ def get_crypto_menu():
         [KeyboardButton("🏠 Trang chủ")]
     ], resize_keyboard=True)
 
-# --- MENU BÁO CÁO CÁC TẦNG ---
 def get_report_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Stock"), KeyboardButton("🪙 Crypto"), KeyboardButton("🥇 Tài sản khác")],
@@ -61,6 +61,14 @@ def get_detail_report_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📅 Chọn thời gian")],
         [KeyboardButton("⬅️ Menu Báo Cáo"), KeyboardButton("🏠 Trang chủ")]
+    ], resize_keyboard=True)
+
+def get_time_filter_menu():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📅 7 Ngày qua"), KeyboardButton("📅 30 Ngày qua")],
+        [KeyboardButton("📅 3 Tháng"), KeyboardButton("📅 1 Năm")],
+        [KeyboardButton("🗓 Tùy chọn"), KeyboardButton("♾ Toàn thời gian")], # ĐÃ MỞ KHÓA NÚT NÀY
+        [KeyboardButton("⬅️ Menu Báo Cáo")]
     ], resize_keyboard=True)
 
 # --- XỬ LÝ CALLBACK ---
@@ -96,23 +104,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("_")
         field, trx_id = parts[1], parts[-1]
         context.user_data['edit_trx'] = {'id': trx_id, 'field': field}
-        prompts = {
-            'qty': "🔢 Vui lòng nhập <b>SỐ LƯỢNG</b> mới:",
-            'price': "💲 Vui lòng nhập <b>GIÁ</b> mới:",
-            'date': "📅 Vui lòng nhập <b>NGÀY</b> mới (Định dạng: YYYY-MM-DD):"
-        }
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Hủy thao tác", callback_data=f"view_{trx_id}")]])
-        await query.message.reply_html(f"✏️ <b>Đang sửa giao dịch #{trx_id}</b>\n{prompts[field]}", reply_markup=kb)
+        prompts = {'qty': "🔢 Nhập SỐ LƯỢNG:", 'price': "💲 Nhập GIÁ:", 'date': "📅 Nhập NGÀY (YYYY-MM-DD):"}
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Hủy", callback_data=f"view_{trx_id}")]])
+        await query.message.reply_html(f"✏️ <b>Đang sửa #{trx_id}</b>\n{prompts[field]}", reply_markup=kb)
 
     elif data.startswith("confirm_delete_"):
         trx_id = data.split("_")[-1]
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ CÓ, XÓA NGAY", callback_data=f"execute_delete_{trx_id}")], [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]])
-        await query.edit_message_text(f"⚠️ <b>XÁC NHẬN XÓA?</b>\nBạn chắc chắn muốn xóa vĩnh viễn giao dịch #{trx_id}?", reply_markup=kb, parse_mode=constants.ParseMode.HTML)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ CÓ, XÓA", callback_data=f"execute_delete_{trx_id}")], [InlineKeyboardButton("❌ HỦY", callback_data=f"view_{trx_id}")]])
+        await query.edit_message_text(f"⚠️ <b>XÓA GIAO DỊCH #{trx_id}?</b>", reply_markup=kb, parse_mode=constants.ParseMode.HTML)
 
     elif data.startswith("execute_delete_"):
         trx_id = data.split("_")[-1]
-        if repo.delete_transaction(trx_id): await query.edit_message_text(f"✅ Đã xóa thành công giao dịch #{trx_id}!")
-        else: await query.edit_message_text("❌ Lỗi: Không thể xóa.")
+        if repo.delete_transaction(trx_id): await query.edit_message_text(f"✅ Xóa thành công #{trx_id}!")
+        else: await query.edit_message_text("❌ Lỗi.")
 
 async def handle_transaction_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -140,8 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Giao dịch không tồn tại."); return
         try:
             rate_factor = 1
-            if trx['qty'] > 0 and trx['price'] > 0:
-                rate_factor = trx['total_value'] / (trx['qty'] * trx['price'])
+            if trx['qty'] > 0 and trx['price'] > 0: rate_factor = trx['total_value'] / (trx['qty'] * trx['price'])
             new_qty, new_price, new_date = trx['qty'], trx['price'], trx['date']
             if field == 'qty': new_qty = float(text.replace(',', '.'))
             elif field == 'price': new_price = float(text.replace(',', '.'))
@@ -154,12 +157,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             repo.update_transaction(trx_id, new_qty, new_price, new_total, new_date)
             del context.user_data['edit_trx']
             content, kb = HistoryModule(user_id).get_detail_view(trx_id)
-            await update.message.reply_html(f"✅ <b>ĐÃ CẬP NHẬT THÀNH CÔNG!</b>\n\n{content}", reply_markup=kb)
-        except ValueError:
-            await update.message.reply_text("❌ Vui lòng nhập số hợp lệ.")
+            await update.message.reply_html(f"✅ <b>CẬP NHẬT THÀNH CÔNG!</b>\n\n{content}", reply_markup=kb)
+        except ValueError: await update.message.reply_text("❌ Vui lòng nhập số hợp lệ.")
         return
 
-    # --- NHÓM 1: LỘ TRÌNH ĐIỀU HƯỚNG MENU BÁO CÁO MỚI ---
+    # --- NHÓM 1: LỘ TRÌNH ĐIỀU HƯỚNG BÁO CÁO & BỘ LỌC THỜI GIAN ---
     if text == "⬅️ Menu Báo Cáo" or text == "📊 Báo cáo":
         context.user_data['current_menu'] = 'REPORT'
         await update.message.reply_html(ReportModule(user_id).get_overview_report(), reply_markup=get_report_menu())
@@ -167,13 +169,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📊 Stock":
         context.user_data['current_menu'] = 'REPORT'
-        # Đã đổi sang get_category_report_menu
+        context.user_data['report_category'] = 'STOCK'
         await update.message.reply_html(ReportModule(user_id).get_category_report('STOCK'), reply_markup=get_category_report_menu())
         return
 
     if text == "🪙 Crypto":
         if context.user_data.get('current_menu') == 'REPORT':
-            # Đã đổi sang get_category_report_menu
+            context.user_data['report_category'] = 'CRYPTO'
             await update.message.reply_html(ReportModule(user_id).get_category_report('CRYPTO'), reply_markup=get_category_report_menu())
         else:
             context.user_data['current_menu'] = 'CRYPTO'
@@ -182,9 +184,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "🥇 Tài sản khác":
         if context.user_data.get('current_menu') == 'REPORT':
+            context.user_data['report_category'] = 'OTHER'
             await update.message.reply_html(ReportModule(user_id).get_category_report('OTHER'), reply_markup=get_category_report_menu())
-        else:
-            await update.message.reply_text("Tính năng quản lý Tài sản khác đang phát triển.")
+        else: await update.message.reply_text("Đang phát triển.")
         return
 
     if text == "🔍 TÌM KIẾM":
@@ -192,8 +194,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html("🔍 <b>NHẬP MÃ TÀI SẢN CẦN PHÂN TÍCH:</b>\nVí dụ: <code>FPT</code>, <code>BTC</code>...", reply_markup=get_detail_report_menu())
         return
 
+    # KÍCH HOẠT MENU THỜI GIAN
     if text == "📅 Chọn thời gian":
-        await update.message.reply_text("⏳ Tính năng chọn khoảng thời gian đang được CTO phát triển cho phiên bản tiếp theo!")
+        await update.message.reply_html("⏳ <b>CHỌN KHOẢNG THỜI GIAN:</b>\nNgài muốn xem báo cáo biến động trong bao lâu?", reply_markup=get_time_filter_menu())
+        return
+
+    # LUỒNG XỬ LÝ NÚT "TÙY CHỌN"
+    if text == "🗓 Tùy chọn":
+        context.user_data['report_custom_time'] = True
+        await update.message.reply_html(
+            "🗓 <b>NHẬP KHOẢNG THỜI GIAN TÙY CHỌN:</b>\nCú pháp: <code>DD/MM/YYYY - DD/MM/YYYY</code>\n\nVí dụ: <code>01/01/2026 - 26/02/2026</code>", 
+            reply_markup=get_category_report_menu()
+        )
+        return
+
+    # BỘ LỌC THỜI GIAN CỐ ĐỊNH
+    time_filters = ["📅 7 Ngày qua", "📅 30 Ngày qua", "📅 3 Tháng", "📅 1 Năm", "♾ Toàn thời gian"]
+    if text in time_filters:
+        cat = context.user_data.get('report_category', 'STOCK')
+        now = datetime.datetime.now()
+        start_date = None
+        label = text.replace("📅 ", "").replace("♾ ", "")
+        
+        if "7 Ngày" in text: start_date = (now - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+        elif "30 Ngày" in text: start_date = (now - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+        elif "3 Tháng" in text: start_date = (now - datetime.timedelta(days=90)).strftime('%Y-%m-%d')
+        elif "1 Năm" in text: start_date = (now - datetime.timedelta(days=365)).strftime('%Y-%m-%d')
+        
+        await update.message.reply_html(
+            ReportModule(user_id).get_category_report(cat, start_date=start_date, label_time=label), 
+            reply_markup=get_category_report_menu()
+        )
+        return
+
+    # HỨNG DỮ LIỆU TỪ TRẠNG THÁI "TÙY CHỌN" HOẶC "TÌM KIẾM"
+    if context.user_data.get('report_custom_time'):
+        match = re.match(r'^(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})$', text.strip())
+        if match:
+            del context.user_data['report_custom_time']
+            start_str, end_str = match.groups()
+            try:
+                start_date = datetime.datetime.strptime(start_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                end_date = datetime.datetime.strptime(end_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                cat = context.user_data.get('report_category', 'STOCK')
+                label = f"Từ {start_str} đến {end_str}"
+                await update.message.reply_html(
+                    ReportModule(user_id).get_category_report(cat, start_date=start_date, end_date=end_date, label_time=label), 
+                    reply_markup=get_category_report_menu()
+                )
+            except ValueError:
+                await update.message.reply_text("❌ Ngày tháng không hợp lệ. Vui lòng thử lại.")
+        else:
+            await update.message.reply_html("❌ Sai cú pháp! Hãy nhập đúng dạng: <code>DD/MM/YYYY - DD/MM/YYYY</code>\nHoặc bấm nút để hủy.")
         return
 
     if context.user_data.get('report_search'):
@@ -206,6 +258,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]: 
         context.user_data['current_menu'] = 'HOME'
         if 'report_search' in context.user_data: del context.user_data['report_search']
+        if 'report_custom_time' in context.user_data: del context.user_data['report_custom_time']
         await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=get_ceo_menu())
         return
 
@@ -215,9 +268,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📊 Chứng Khoán": await update.message.reply_html(StockModule(user_id).run(), reply_markup=get_stock_menu()); return
-    if text == "📜 Lịch sử":
-        content, kb = HistoryModule(user_id).run()
-        await update.message.reply_html(content, reply_markup=kb); return
+    if text == "📜 Lịch sử": content, kb = HistoryModule(user_id).run(); await update.message.reply_html(content, reply_markup=kb); return
     if text in ["📈 Báo cáo nhóm", "📈 Báo cáo Crypto"]:
         mod = CryptoModule(user_id) if "Crypto" in text else StockModule(user_id)
         await update.message.reply_html(mod.get_group_report()); return
@@ -228,10 +279,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html("🔄 <b>CẬP NHẬT GIÁ:</b>\n<code>gia [Mã] [Giá mới]</code>"); return
     if text in ["❌ Xóa mã", "❌ Xóa mã Crypto"]:
         await update.message.reply_html("🗑 <b>XÓA MÃ:</b> Gõ <code>xoa [Mã]</code>"); return
-    if text == "🔄 Làm mới":
-        await update.message.reply_html(f"🔄 <b>Làm mới:</b>\n\n{DashboardModule(user_id).run()}"); return
+    if text == "🔄 Làm mới": await update.message.reply_html(f"🔄 <b>Làm mới:</b>\n\n{DashboardModule(user_id).run()}"); return
 
-    # --- NHÓM 3: PREFIX VÀ LỆNH TÌM LỊCH SỬ ---
+    # --- NHÓM 3: GIAO DỊCH NHANH ---
     if text.lower().startswith("xoa "):
         ticker = text.split()[1].upper()
         with db.get_connection() as conn:
@@ -251,7 +301,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content, kb = HistoryModule(user_id).run(search_query=text)
         await update.message.reply_html(content, reply_markup=kb); return
 
-    # --- NHÓM 4: GHI NHẬN GIAO DỊCH ---
     parsed = CommandParser.parse_transaction(text)
     if parsed:
         if parsed['action'] in ['BUY', 'OUT', 'WITHDRAW']:
