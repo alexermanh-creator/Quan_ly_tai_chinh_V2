@@ -15,13 +15,11 @@ class ReportModule(BaseModule):
         self.repo = Repository()
 
     def format_currency(self, value, is_pnl=False):
-        """Định dạng tiền tệ chuẩn VNĐ"""
         if value == 0: return "0đ"
         sign = "+" if is_pnl and value > 0 else ""
         return f"{sign}{value:,.0f}đ".replace(',', '.')
 
     def create_progress_bar(self, percentage, color_emoji):
-        """Vẽ thanh Progress Bar bằng Emoji"""
         if percentage <= 0: return f"[{'⚪' * 10}]"
         filled = round(percentage / 10)
         if filled == 0 and percentage > 0: filled = 1
@@ -30,8 +28,6 @@ class ReportModule(BaseModule):
         return f"[{color_emoji * filled}{'⚪' * empty}]"
 
     def calculate_portfolio(self):
-        """CỖ MÁY TÍNH TOÁN LÕI (Đã gọi đúng hàm bọc thép)"""
-        # SỬA LỖI Ở ĐÂY: Gọi get_all_transactions_for_report thay vì hàm cũ
         transactions = self.repo.get_all_transactions_for_report(self.user_id)
         current_prices = self.repo.get_current_prices()
 
@@ -80,7 +76,9 @@ class ReportModule(BaseModule):
                 tkr['total_sell_vol'] += trx['qty']
                 
                 realized_profit = trx['total_value'] - (trx['qty'] * tkr['avg_cost'])
+                trx['pnl_generated'] = realized_profit 
                 tkr['realized_pnl'] += realized_profit
+                
                 tkr['qty'] -= trx['qty']
                 if tkr['qty'] <= 0:
                     tkr['qty'] = 0
@@ -88,6 +86,7 @@ class ReportModule(BaseModule):
             elif trx['type'] == 'CASH_DIVIDEND':
                 data['cash_available'] += trx['total_value']
                 tkr['dividends'] += trx['total_value']
+                trx['pnl_generated'] = trx['total_value']
 
         total_market_value = 0
         total_realized = 0
@@ -111,16 +110,12 @@ class ReportModule(BaseModule):
         data['net_worth'] = data['cash_available'] + total_market_value
         data['net_invested'] = data['total_in'] - data['total_out']
         data['total_pnl'] = total_realized + total_unrealized + sum(t['dividends'] for t in data['tickers'].values())
-        
-        if data['net_invested'] > 0:
-            data['roi'] = (data['total_pnl'] / data['net_invested']) * 100
-        else:
-            data['roi'] = 0
+        data['roi'] = (data['total_pnl'] / data['net_invested']) * 100 if data['net_invested'] > 0 else 0
 
-        return data
+        return data, transactions
 
     def get_overview_report(self):
-        d = self.calculate_portfolio()
+        d, _ = self.calculate_portfolio()
         now = datetime.now().strftime("%d/%m/%Y | %H:%M")
         
         nw = d['net_worth'] if d['net_worth'] > 0 else 1
@@ -164,27 +159,33 @@ class ReportModule(BaseModule):
 ━━━━━━━━━━━━━━━━━━━"""
         return html
 
-    def get_category_report(self, asset_type, label_time="Toàn thời gian"):
-        d = self.calculate_portfolio()
+    def get_category_report(self, asset_type, start_date=None, end_date=None, label_time="Toàn thời gian"):
+        """TẦNG 2: Báo cáo theo Danh mục TÍCH HỢP BỘ LỌC THỜI GIAN (Có end_date)"""
+        d, all_transactions = self.calculate_portfolio()
         
-        cat_tickers = {k: v for k, v in d['tickers'].items() if v['type'] == asset_type}
-        sorted_tickers = sorted(cat_tickers.items(), key=lambda x: x[1]['realized_pnl'], reverse=True)
-        
-        win_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers) if v['realized_pnl'] > 0][:3]
-        lose_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers[::-1]) if v['realized_pnl'] < 0][:3]
+        period_txs = [t for t in all_transactions if t['asset_type'] == asset_type]
+        if start_date:
+            period_txs = [t for t in period_txs if t['date'] >= start_date]
+        if end_date:
+            period_txs = [t for t in period_txs if t['date'] <= end_date + " 23:59:59"]
 
-        win_str = "\n".join(win_list) if win_list else "   Không có dữ liệu"
-        lose_str = "\n".join(lose_list) if lose_list else "   Không có dữ liệu"
+        c_in = sum(t['total_value'] for t in period_txs if t['type'] in ['IN', 'DEPOSIT'])
+        c_out = sum(t['total_value'] for t in period_txs if t['type'] in ['OUT', 'WITHDRAW'])
+        cat_total_buy = sum(t['total_value'] for t in period_txs if t['type'] == 'BUY')
+        cat_total_sell = sum(t['total_value'] for t in period_txs if t['type'] == 'SELL')
+        realized_only = sum(t.get('pnl_generated', 0) for t in period_txs if t['type'] in ['SELL', 'CASH_DIVIDEND'])
 
-        realized_only = sum(v['realized_pnl'] for v in cat_tickers.values())
-        
-        c_in = d['cat_in'][asset_type]
-        c_out = d['cat_out'][asset_type]
+        ticker_period_pnl = {}
+        for t in period_txs:
+            if t['type'] in ['SELL', 'CASH_DIVIDEND']:
+                ticker_period_pnl[t['ticker']] = ticker_period_pnl.get(t['ticker'], 0) + t.get('pnl_generated', 0)
+                
+        sorted_period_tickers = sorted(ticker_period_pnl.items(), key=lambda x: x[1], reverse=True)
+        win_list = [f"   {i+1}. {k}: {self.format_currency(v, True)}" for i, (k, v) in enumerate(sorted_period_tickers) if v > 0][:3]
+        lose_list = [f"   {i+1}. {k}: {self.format_currency(v, True)}" for i, (k, v) in enumerate(sorted_period_tickers[::-1]) if v < 0][:3]
 
-        # SỬA LỖI Ở ĐÂY: Gọi đúng hàm bọc thép
-        transactions = self.repo.get_all_transactions_for_report(self.user_id)
-        cat_total_buy = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'BUY')
-        cat_total_sell = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'SELL')
+        win_str = "\n".join(win_list) if win_list else "   Không có dữ liệu chốt lời"
+        lose_str = "\n".join(lose_list) if lose_list else "   Không có dữ liệu cắt lỗ"
 
         name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
 
@@ -202,15 +203,15 @@ class ReportModule(BaseModule):
 🚀 <b>HIỆU SUẤT TRONG KỲ (P&L):</b> 
 📈 Lãi/Lỗ (Đã chốt):     <b>{self.format_currency(realized_only, True)}</b>
 
-🏆 <b>Top Đóng Góp:</b> 
+🏆 <b>Top Đóng Góp (Trong kỳ):</b> 
 {win_str} 
-⚠️ <b>Top Kéo Lùi:</b> 
+⚠️ <b>Top Kéo Lùi (Trong kỳ):</b> 
 {lose_str} 
 ━━━━━━━━━━━━━━━━━━━"""
         return html
 
     def get_ticker_detail_report(self, ticker):
-        d = self.calculate_portfolio()
+        d, _ = self.calculate_portfolio()
         ticker = ticker.upper()
         
         if ticker not in d['tickers']:
@@ -236,38 +237,3 @@ class ReportModule(BaseModule):
 💰 <b>TỔNG LỢI NHUẬN TỪ {ticker}: {self.format_currency(t['total_pnl'], True)}</b> 
 ━━━━━━━━━━━━━━━━━━━"""
         return html
-
-    def export_excel_report(self):
-        if pd is None:
-            return None, "❌ Cần cài đặt pandas để xuất Excel (pip install pandas openpyxl)"
-            
-        d = self.calculate_portfolio()
-        
-        overview_data = {
-            'Chỉ số': ['Tổng Tài Sản', 'Tiền mặt', 'Đang đầu tư', 'Tổng Nạp', 'Tổng Rút', 'Vốn Ròng', 'Tổng Lãi/Lỗ'],
-            'Giá trị (VNĐ)': [d['net_worth'], d['cash_available'], d['total_market_value'], d['total_in'], d['total_out'], d['net_invested'], d['total_pnl']]
-        }
-        df_overview = pd.DataFrame(overview_data)
-
-        tickers_list = []
-        for k, v in d['tickers'].items():
-            tickers_list.append({
-                'Mã': k,
-                'Phân loại': v['type'],
-                'Số lượng đang giữ': v['qty'],
-                'Giá vốn TB': v['avg_cost'],
-                'Giá hiện tại': v['current_price'],
-                'Lãi/Lỗ đã chốt': v['realized_pnl'],
-                'Lãi/Lỗ đang gồng': v['unrealized_pnl'],
-                'Tổng Lợi Nhuận': v['total_pnl']
-            })
-        df_tickers = pd.DataFrame(tickers_list) if tickers_list else pd.DataFrame(columns=['Mã', 'Phân loại', 'Số lượng đang giữ'])
-
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_overview.to_excel(writer, sheet_name='Tổng Quan', index=False)
-            df_tickers.to_excel(writer, sheet_name='Chi Tiết Danh Mục', index=False)
-        
-        output.seek(0)
-        filename = f"Bao_Cao_Tai_Chinh_{datetime.now().strftime('%d%m%Y')}.xlsx"
-        return output, filename
