@@ -3,58 +3,110 @@ import pandas as pd
 import io
 from datetime import datetime
 import xlsxwriter
-from backend.database.repository import Repository # Hợp nhất: Import Class chính xác
+from backend.database.repository import Repository
 
 def generate_excel_report(user_id):
-    # 1. Gọi hàm thông qua Class (Static Method)
     raw_data = Repository.get_all_transactions_for_report(user_id)
+    current_prices = Repository.get_current_prices()
     
-    # 2. Tạo Buffer để lưu file trên RAM
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     workbook = writer.book
 
-    # 3. Tạo các định dạng (Formatting)
-    money_fmt = workbook.add_format({'num_format': '#,##0', 'align': 'right'})
-    title_fmt = workbook.add_format({'bold': True, 'font_size': 14, 'color': '#203764'})
+    # --- ĐỊNH DẠNG (FORMATTING) ---
+    title_fmt = workbook.add_format({'bold': True, 'font_size': 16, 'color': '#1F4E78', 'align': 'center'})
+    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center'})
+    money_fmt = workbook.add_format({'num_format': '#,##0', 'border': 1})
+    pct_fmt = workbook.add_format({'num_format': '0.00%', 'border': 1})
+    border_fmt = workbook.add_format({'border': 1})
 
-    # --- SHEET: NHẬT KÝ GIAO DỊCH (RAW DATA) ---
-    # Chuyển dữ liệu sang DataFrame
-    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame(columns=['id', 'date', 'type', 'ticker', 'total_value'])
+    # --- XỬ LÝ DỮ LIỆU ---
+    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame()
     
-    # Ghi dữ liệu thực tế vào Sheet
-    df_tx.to_excel(writer, sheet_name='Raw_Transactions', index=False)
-    ws_raw = writer.sheets['Raw_Transactions']
-    ws_raw.freeze_panes(1, 0)
-    ws_raw.set_column('A:J', 15)
+    # 1. Tính toán Portfolio (Danh mục hiện tại)
+    portfolio = {}
+    total_in = 0
+    total_out = 0
+    
+    for trx in raw_data:
+        t = trx['ticker']
+        if trx['type'] in ['IN', 'DEPOSIT']: total_in += trx['total_value']
+        elif trx['type'] in ['OUT', 'WITHDRAW']: total_out += trx['total_value']
+        
+        if t not in portfolio:
+            portfolio[t] = {'qty': 0, 'cost': 0, 'type': trx['asset_type']}
+        
+        p = portfolio[t]
+        if trx['type'] == 'BUY':
+            new_qty = p['qty'] + trx['qty']
+            if new_qty > 0:
+                p['cost'] = (p['qty'] * p['cost'] + trx['total_value']) / new_qty
+            p['qty'] = new_qty
+        elif trx['type'] == 'SELL':
+            p['qty'] -= trx['qty']
+            if p['qty'] <= 0: p['qty'] = 0; p['cost'] = 0
 
-    # --- SHEET: DASHBOARD ---
+    portfolio_list = []
+    for t, v in portfolio.items():
+        if v['qty'] > 0:
+            curr_p = current_prices.get(t, v['cost'])
+            market_val = v['qty'] * curr_p
+            cost_val = v['qty'] * v['cost']
+            pnl = market_val - cost_val
+            portfolio_list.append({
+                'Mã': t, 'Loại': v['type'], 'Số lượng': v['qty'], 
+                'Giá vốn': v['cost'], 'Giá hiện tại': curr_p,
+                'Tổng vốn': cost_val, 'Giá trị TT': market_val,
+                'Lãi/Lỗ': pnl, '% Lãi/Lỗ': pnl/cost_val if cost_val > 0 else 0
+            })
+    df_port = pd.DataFrame(portfolio_list)
+
+    # --- SHEET 1: DASHBOARD ---
     ws_dash = workbook.add_worksheet('📊 Dashboard')
     ws_dash.hide_gridlines(2)
-    ws_dash.write('A1', 'BÁO CÁO TÀI CHÍNH THÀNH AN', title_fmt)
-    ws_dash.write('A2', f'Trích xuất: {datetime.now().strftime("%d/%m/%Y %H:%M")}')
+    ws_dash.merge_range('A1:H1', 'BÁO CÁO TÀI CHÍNH QUẢN TRỊ', title_fmt)
     
-    # 4. Vẽ biểu đồ từ dữ liệu thật
-    if not df_tx.empty and 'asset_type' in df_tx.columns:
-        # Group by để lấy tỷ trọng
-        summary = df_tx.groupby('asset_type')['total_value'].sum().reset_index()
-        
-        # Ghi dữ liệu summary vào vùng tạm (Cột K, L)
-        start_row = 10
-        for i, row in summary.iterrows():
-            ws_dash.write(start_row + i, 10, row['asset_type'])
-            ws_dash.write(start_row + i, 11, row['total_value'])
+    # Summary Table
+    ws_dash.write('B3', 'TỔNG TÀI SẢN', header_fmt)
+    ws_dash.write('C3', 'VỐN RÒNG', header_fmt)
+    ws_dash.write('D3', 'LÃI/LỖ TẠM TÍNH', header_fmt)
+    
+    aum = df_port['Giá trị TT'].sum() if not df_port.empty else 0
+    net_invested = total_in - total_out
+    ws_dash.write('B4', aum, money_fmt)
+    ws_dash.write('C4', net_invested, money_fmt)
+    ws_dash.write('D4', aum - net_invested if net_invested > 0 else 0, money_fmt)
 
-        # Tạo Biểu đồ Tròn
-        chart = workbook.add_chart({'type': 'pie'})
-        chart.add_series({
+    # Dữ liệu cho biểu đồ tròn (Phân bổ tài sản)
+    if not df_port.empty:
+        summary_cat = df_port.groupby('Loại')['Giá trị TT'].sum().reset_index()
+        for i, row in summary_cat.iterrows():
+            ws_dash.write(i+20, 10, row['Loại'])
+            ws_dash.write(i+20, 11, row['Giá trị TT'])
+        
+        pie_chart = workbook.add_chart({'type': 'pie'})
+        pie_chart.add_series({
             'name': 'Cơ cấu Tài sản',
-            'categories': ['📊 Dashboard', start_row, 10, start_row + len(summary) - 1, 10],
-            'values':     ['📊 Dashboard', start_row, 11, start_row + len(summary) - 1, 11],
-            'data_labels': {'percentage': True, 'leader_lines': True},
+            'categories': ['📊 Dashboard', 20, 10, 20 + len(summary_cat)-1, 10],
+            'values':     ['📊 Dashboard', 20, 11, 20 + len(summary_cat)-1, 11],
+            'data_labels': {'percentage': True, 'position': 'outside_end'},
         })
-        chart.set_title({'name': 'Tỷ trọng Phân bổ Tài sản'})
-        ws_dash.insert_chart('B5', chart)
+        pie_chart.set_title({'name': 'Tỷ trọng Danh mục'})
+        ws_dash.insert_chart('B6', pie_chart)
+
+    # --- SHEET 2: CHI TIẾT DANH MỤC ---
+    if not df_port.empty:
+        df_port.to_excel(writer, sheet_name='💼 Danh Mục', index=False)
+        ws_p = writer.sheets['💼 Danh Mục']
+        ws_p.set_column('A:E', 12, border_fmt)
+        ws_p.set_column('F:H', 18, money_fmt)
+        ws_p.set_column('I:I', 12, pct_fmt)
+
+    # --- SHEET 3: NHẬT KÝ GIAO DỊCH ---
+    df_tx.to_excel(writer, sheet_name='📝 Nhật Ký', index=False)
+    ws_tx = writer.sheets['📝 Nhật Ký']
+    ws_tx.set_column('B:B', 20)
+    ws_tx.set_column('H:I', 15, money_fmt)
 
     writer.close()
     output.seek(0)
