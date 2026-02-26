@@ -1,7 +1,13 @@
 # backend/modules/report.py
+import io
 from datetime import datetime
 from backend.interface import BaseModule
 from backend.database.repository import Repository
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None  # Sẽ yêu cầu cài đặt pandas và openpyxl để xuất Excel
 
 class ReportModule(BaseModule):
     def __init__(self, user_id):
@@ -9,31 +15,37 @@ class ReportModule(BaseModule):
         self.repo = Repository()
 
     def format_currency(self, value, is_pnl=False):
-        """Định dạng tiền tệ chuẩn VNĐ và thêm dấu +/- cho PnL"""
+        """Định dạng tiền tệ chuẩn VNĐ"""
         if value == 0: return "0đ"
         sign = "+" if is_pnl and value > 0 else ""
         return f"{sign}{value:,.0f}đ".replace(',', '.')
 
     def create_progress_bar(self, percentage, color_emoji):
-        """Vẽ thanh Progress Bar bằng Emoji đúng chuẩn CEO yêu cầu"""
-        filled = int(percentage / 10) if percentage > 0 else 0
-        filled = min(10, max(0, filled)) # Khóa giá trị từ 0 đến 10
+        """VẼ THANH PROGRESS BAR: Đã fix lỗi làm tròn thông minh"""
+        if percentage <= 0: return f"[{'⚪' * 10}]"
+        filled = round(percentage / 10)
+        # Nếu có phần trăm nhưng quá nhỏ để làm tròn thành 1, ép = 1 chấm màu
+        if filled == 0 and percentage > 0: filled = 1
+        filled = min(10, filled)
         empty = 10 - filled
         return f"[{color_emoji * filled}{'⚪' * empty}]"
 
-    def calculate_portfolio(self):
-        """CỖ MÁY TÍNH TOÁN LÕI: Quét toàn bộ lịch sử để tính PnL và Giá vốn"""
-        transactions = self.repo.get_all_transactions_for_report(self.user_id)
+    def calculate_portfolio(self, start_date=None, end_date=None, asset_filter=None):
+        """CỖ MÁY TÍNH TOÁN LÕI"""
+        transactions = self.repo.get_transactions_in_period(self.user_id, start_date, end_date, asset_filter)
         current_prices = self.repo.get_current_prices()
 
         data = {
             'cash_available': 0, 'total_in': 0, 'total_out': 0,
             'total_buy': 0, 'total_sell': 0,
             'assets': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
+            # BỔ SUNG: Rổ đếm Nạp/Rút riêng cho từng danh mục
+            'cat_in': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
+            'cat_out': {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0},
             'tickers': {}
         }
 
-        # Vòng lặp tính toán Giá vốn trung bình và Lãi chốt (Realized PnL)
+        # Thuật toán tính Giá vốn trung bình và Realized PnL
         for trx in transactions:
             t = trx['ticker']
             a_type = trx['asset_type'] if trx['asset_type'] in ['STOCK', 'CRYPTO'] else 'OTHER'
@@ -50,15 +62,16 @@ class ReportModule(BaseModule):
             if trx['type'] in ['IN', 'DEPOSIT']:
                 data['total_in'] += trx['total_value']
                 data['cash_available'] += trx['total_value']
+                data['cat_in'][a_type] += trx['total_value'] # Tính nạp riêng
             elif trx['type'] in ['OUT', 'WITHDRAW']:
                 data['total_out'] += trx['total_value']
                 data['cash_available'] -= trx['total_value']
+                data['cat_out'][a_type] += trx['total_value'] # Tính rút riêng
             elif trx['type'] == 'BUY':
                 data['cash_available'] -= trx['total_value']
                 data['total_buy'] += trx['total_value']
                 tkr['total_buy_vol'] += trx['qty']
                 
-                # Tính lại giá vốn trung bình (Average Cost)
                 new_qty = tkr['qty'] + trx['qty']
                 if new_qty > 0:
                     tkr['avg_cost'] = ((tkr['qty'] * tkr['avg_cost']) + trx['total_value']) / new_qty
@@ -68,7 +81,6 @@ class ReportModule(BaseModule):
                 data['total_sell'] += trx['total_value']
                 tkr['total_sell_vol'] += trx['qty']
                 
-                # Tính lãi chốt (Realized PnL)
                 realized_profit = trx['total_value'] - (trx['qty'] * tkr['avg_cost'])
                 tkr['realized_pnl'] += realized_profit
                 tkr['qty'] -= trx['qty']
@@ -79,13 +91,13 @@ class ReportModule(BaseModule):
                 data['cash_available'] += trx['total_value']
                 tkr['dividends'] += trx['total_value']
 
-        # Tính toán Giá trị thị trường và Lãi gồng (Unrealized PnL)
+        # Tính toán Giá trị thị trường (Market Value) và Unrealized PnL
         total_market_value = 0
         total_realized = 0
         total_unrealized = 0
 
         for t, tkr in data['tickers'].items():
-            curr_price = current_prices.get(t, tkr['avg_cost']) # Dùng giá cập nhật, nếu không có thì lấy giá vốn
+            curr_price = current_prices.get(t, tkr['avg_cost']) 
             tkr['current_price'] = curr_price
             
             market_val = tkr['qty'] * curr_price
@@ -103,8 +115,10 @@ class ReportModule(BaseModule):
         data['net_invested'] = data['total_in'] - data['total_out']
         data['total_pnl'] = total_realized + total_unrealized + sum(t['dividends'] for t in data['tickers'].values())
         
-        # Tránh chia cho 0 khi tính tỷ suất ROI
-        data['roi'] = (data['total_pnl'] / data['net_invested'] * 100) if data['net_invested'] > 0 else 0
+        if data['net_invested'] > 0:
+            data['roi'] = (data['total_pnl'] / data['net_invested']) * 100
+        else:
+            data['roi'] = 0
 
         return data
 
@@ -119,16 +133,16 @@ class ReportModule(BaseModule):
         pct_other = (d['assets']['OTHER'] / nw) * 100
 
         sorted_tickers = sorted(d['tickers'].items(), key=lambda x: x[1]['total_pnl'], reverse=True)
-        top_winners = [f"{k} ({self.format_currency(v['total_pnl'], True)})" for k, v in sorted_tickers if v['total_pnl'] > 0][:2]
-        top_losers = [f"{k} ({self.format_currency(v['total_pnl'], True)})" for k, v in sorted_tickers if v['total_pnl'] < 0][::-1][:2]
+        top_winners = [f"{k} (+{self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] > 0][:2]
+        top_losers = [f"{k} ({self.format_currency(v['total_pnl'])})" for k, v in sorted_tickers if v['total_pnl'] < 0][::-1][:2]
 
         win_str = " | ".join(top_winners) if top_winners else "Chưa có"
         lose_str = " | ".join(top_losers) if top_losers else "Chưa có"
 
         html = f"""📊 <b>BÁO CÁO TÀI CHÍNH TỔNG QUAN (Toàn thời gian)</b>
-📅 {now} 
+📅 {now}
 ━━━━━━━━━━━━━━━━━━━ 
-💰 TỔNG TÀI SẢN:       <b>{self.format_currency(d['net_worth'])}</b> 
+💰 <b>TỔNG TÀI SẢN:</b>       <b>{self.format_currency(d['net_worth'])}</b> 
 💵 Tiền mặt khả dụng:    {self.format_currency(d['cash_available'])} 
 📈 Đang đầu tư:        {self.format_currency(d['total_market_value'])}
 
@@ -154,31 +168,41 @@ class ReportModule(BaseModule):
 ━━━━━━━━━━━━━━━━━━━"""
         return html
 
-    def get_category_report(self, asset_type):
-        """TẦNG 2: Báo cáo theo Danh mục riêng biệt"""
-        d = self.calculate_portfolio()
+    def get_category_report(self, asset_type, start_date=None, end_date=None, label_time="Toàn thời gian"):
+        """TẦNG 2: Báo cáo theo Danh mục (Stock/Crypto)"""
+        d = self.calculate_portfolio(start_date, end_date, asset_filter=asset_type)
+        
         cat_tickers = {k: v for k, v in d['tickers'].items() if v['type'] == asset_type}
         sorted_tickers = sorted(cat_tickers.items(), key=lambda x: x[1]['realized_pnl'], reverse=True)
         
-        win_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers) if v['realized_pnl'] > 0][:2]
-        lose_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers[::-1]) if v['realized_pnl'] < 0][:2]
+        win_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers) if v['realized_pnl'] > 0][:3]
+        lose_list = [f"   {i+1}. {k}: {self.format_currency(v['realized_pnl'], True)}" for i, (k, v) in enumerate(sorted_tickers[::-1]) if v['realized_pnl'] < 0][:3]
 
-        win_str = "\n".join(win_list) if win_list else "   Chưa có dữ liệu"
-        lose_str = "\n".join(lose_list) if lose_list else "   Chưa có dữ liệu"
+        win_str = "\n".join(win_list) if win_list else "   Không có dữ liệu"
+        lose_str = "\n".join(lose_list) if lose_list else "   Không có dữ liệu"
 
         realized_only = sum(v['realized_pnl'] for v in cat_tickers.values())
         
-        transactions = self.repo.get_all_transactions_for_report(self.user_id)
-        cat_total_buy = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'BUY')
-        cat_total_sell = sum(t['total_value'] for t in transactions if t['asset_type'] == asset_type and t['type'] == 'SELL')
+        # BỔ SUNG: Gọi đúng số liệu nạp rút của riêng danh mục này
+        c_in = d['cat_in'][asset_type]
+        c_out = d['cat_out'][asset_type]
+
+        # Đếm tổng mua bán
+        cat_total_buy = sum(t['total_buy_vol'] * t['avg_cost'] for t in cat_tickers.values() if t['qty'] > 0) # Xấp xỉ đơn giản
+        
+        # Để lấy tổng mua/bán chính xác, cần query lại. Ở đây lấy tổng từ repo cho nhanh:
+        transactions = self.repo.get_transactions_in_period(self.user_id, start_date, end_date, asset_type)
+        cat_total_buy = sum(t['total_value'] for t in transactions if t['type'] == 'BUY')
+        cat_total_sell = sum(t['total_value'] for t in transactions if t['type'] == 'SELL')
 
         name = "CHỨNG KHOÁN" if asset_type == 'STOCK' else "CRYPTO" if asset_type == 'CRYPTO' else "TÀI SẢN KHÁC"
 
-        html = f"""📊 <b>BÁO CÁO {name} (Toàn thời gian)</b> 
+        html = f"""📊 <b>BÁO CÁO {name} ({label_time})</b> 
 ━━━━━━━━━━━━━━━━━━━ 
 💸 <b>DÒNG TIỀN TRONG KỲ:</b> 
-⬆️ Thực nạp:            (Đã gộp ở Tổng quan)
-⬇️ Thực rút:             (Đã gộp ở Tổng quan)
+⬆️ Thực nạp:            {self.format_currency(c_in, True)} 
+⬇️ Thực rút:             {self.format_currency(-c_out, True)} 
+🌊 Dòng tiền ròng:      <b>{self.format_currency(c_in - c_out, True)}</b>
 
 🔄 <b>HOẠT ĐỘNG GIAO DỊCH:</b> 
 🛒 Tổng mua:             {self.format_currency(cat_total_buy)} 
@@ -222,3 +246,39 @@ class ReportModule(BaseModule):
 💰 <b>TỔNG LỢI NHUẬN TỪ {ticker}: {self.format_currency(t['total_pnl'], True)}</b> 
 ━━━━━━━━━━━━━━━━━━━"""
         return html
+
+    def export_excel_report(self):
+        """Tạo file Excel Báo Cáo Tài Chính (Cần thư viện pandas)"""
+        if pd is None:
+            return None, "❌ Cần cài đặt pandas để xuất Excel (pip install pandas openpyxl)"
+            
+        d = self.calculate_portfolio()
+        
+        overview_data = {
+            'Chỉ số': ['Tổng Tài Sản', 'Tiền mặt', 'Đang đầu tư', 'Tổng Nạp', 'Tổng Rút', 'Vốn Ròng', 'Tổng Lãi/Lỗ'],
+            'Giá trị (VNĐ)': [d['net_worth'], d['cash_available'], d['total_market_value'], d['total_in'], d['total_out'], d['net_invested'], d['total_pnl']]
+        }
+        df_overview = pd.DataFrame(overview_data)
+
+        tickers_list = []
+        for k, v in d['tickers'].items():
+            tickers_list.append({
+                'Mã': k,
+                'Phân loại': v['type'],
+                'Số lượng đang giữ': v['qty'],
+                'Giá vốn TB': v['avg_cost'],
+                'Giá hiện tại': v['current_price'],
+                'Lãi/Lỗ đã chốt': v['realized_pnl'],
+                'Lãi/Lỗ đang gồng': v['unrealized_pnl'],
+                'Tổng Lợi Nhuận': v['total_pnl']
+            })
+        df_tickers = pd.DataFrame(tickers_list) if tickers_list else pd.DataFrame(columns=['Mã', 'Phân loại', 'Số lượng đang giữ'])
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_overview.to_excel(writer, sheet_name='Tổng Quan', index=False)
+            df_tickers.to_excel(writer, sheet_name='Chi Tiết Danh Mục', index=False)
+        
+        output.seek(0)
+        filename = f"Bao_Cao_Tai_Chinh_{datetime.now().strftime('%d%m%Y')}.xlsx"
+        return output, filename
