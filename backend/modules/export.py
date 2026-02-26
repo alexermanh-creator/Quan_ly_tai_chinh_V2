@@ -6,25 +6,31 @@ import xlsxwriter
 from backend.database.repository import Repository
 
 def generate_excel_report(user_id):
-    """Cỗ máy xuất Excel Pro tích hợp Dashboard và Phân tích danh mục"""
+    """
+    Hệ thống xuất Báo cáo Tài chính Pro: 
+    Dashboard Biểu đồ + Danh mục chi tiết + Nhật ký giao dịch
+    """
+    # 1. Lấy dữ liệu từ Repository (Dùng Static Methods)
     raw_data = Repository.get_all_transactions_for_report(user_id)
     current_prices = Repository.get_current_prices()
     
+    # 2. Tạo Buffer để xử lý file trên RAM
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     workbook = writer.book
 
-    # --- ĐỊNH DẠNG (FORMATTING) ---
-    title_fmt = workbook.add_format({'bold': True, 'font_size': 16, 'color': '#1F4E78', 'align': 'center'})
-    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center'})
-    money_fmt = workbook.add_format({'num_format': '#,##0', 'border': 1})
-    pct_fmt = workbook.add_format({'num_format': '0.00%', 'border': 1})
+    # --- HỆ THỐNG ĐỊNH DẠNG (FORMATTING) ---
+    title_fmt = workbook.add_format({'bold': True, 'font_size': 18, 'font_color': '#1F4E78', 'align': 'center', 'valign': 'vcenter'})
+    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#BDD7EE', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    money_fmt = workbook.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right'})
+    pct_fmt = workbook.add_format({'num_format': '0.00%', 'border': 1, 'align': 'right'})
     border_fmt = workbook.add_format({'border': 1})
-
-    # --- XỬ LÝ DỮ LIỆU ---
-    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame()
     
-    # Tính toán Portfolio thực tế
+    # Định dạng màu sắc Lãi/Lỗ
+    green_money_fmt = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': '#006100', 'bg_color': '#C6EFCE'})
+    red_money_fmt = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': '#9C0006', 'bg_color': '#FFC7CE'})
+
+    # --- 3. XỬ LÝ DỮ LIỆU DANH MỤC (PORTFOLIO) ---
     portfolio = {}
     total_in = 0
     total_out = 0
@@ -47,67 +53,93 @@ def generate_excel_report(user_id):
             p['qty'] -= trx['qty']
             if p['qty'] <= 0: p['qty'] = 0; p['cost'] = 0
 
-    portfolio_list = []
+    portfolio_data = []
     for t, v in portfolio.items():
         if v['qty'] > 0:
             curr_p = current_prices.get(t, v['cost'])
             market_val = v['qty'] * curr_p
             cost_val = v['qty'] * v['cost']
             pnl = market_val - cost_val
-            portfolio_list.append({
-                'Mã': t, 'Loại': v['type'], 'Số lượng': v['qty'], 
-                'Giá vốn': v['cost'], 'Giá hiện tại': curr_p,
-                'Tổng vốn đầu tư': cost_val, 'Giá trị thị trường': market_val,
-                'Lãi/Lỗ tạm tính': pnl, '% Lãi/Lỗ': pnl/cost_val if cost_val > 0 else 0
+            roi = pnl/cost_val if cost_val > 0 else 0
+            portfolio_data.append({
+                'Mã TS': t, 'Phân khúc': v['type'], 'Số lượng': v['qty'], 
+                'Giá vốn TB': v['cost'], 'Giá thị trường': curr_p,
+                'Tổng vốn': cost_val, 'Giá trị hiện tại': market_val,
+                'Lãi/Lỗ tạm tính': pnl, 'ROI (%)': roi
             })
-    df_port = pd.DataFrame(portfolio_list)
+    df_port = pd.DataFrame(portfolio_data)
 
-    # --- SHEET 1: DASHBOARD ---
+    # --- SHEET 1: 📊 DASHBOARD ---
     ws_dash = workbook.add_worksheet('📊 Dashboard')
     ws_dash.hide_gridlines(2)
-    ws_dash.merge_range('A1:H1', 'BÁO CÁO TÀI CHÍNH QUẢN TRỊ', title_fmt)
     
-    # Bảng Summary nhanh
-    ws_dash.write('B3', 'TỔNG TÀI SẢN (AUM)', header_fmt)
-    ws_dash.write('C3', 'VỐN RÒNG THỰC NẠP', header_fmt)
-    ws_dash.write('D3', 'P&L TỔNG HỢP', header_fmt)
-    
-    aum = df_port['Giá trị thị trường'].sum() if not df_port.empty else 0
-    net_invested = total_in - total_out
-    ws_dash.write('B4', aum, money_fmt)
-    ws_dash.write('C4', net_invested, money_fmt)
-    ws_dash.write('D4', aum - net_invested if net_invested > 0 else 0, money_fmt)
+    # Header & Tổng quan
+    ws_dash.merge_range('A1:H2', 'BÁO CÁO QUẢN TRỊ TÀI CHÍNH CHI TIẾT', title_fmt)
+    ws_dash.write('A4', f'Ngày báo cáo: {datetime.now().strftime("%d/%m/%Y %H:%M")}')
 
-    # Vẽ Biểu đồ phân bổ
+    # Thẻ Summary
+    summary_headers = ['TỔNG TÀI SẢN (AUM)', 'VỐN ĐẦU TƯ RÒNG', 'LÃI/LỖ TỔNG HỢP', 'TỶ SUẤT ROI (%)']
+    aum = df_port['Giá trị hiện tại'].sum() if not df_port.empty else 0
+    net_invested = total_in - total_out
+    total_pnl = aum - net_invested if net_invested > 0 else 0
+    total_roi = total_pnl / net_invested if net_invested > 0 else 0
+    
+    summary_vals = [aum, net_invested, total_pnl, total_roi]
+    
+    for col, (header, val) in enumerate(zip(summary_headers, summary_vals)):
+        ws_dash.write(4, col + 1, header, header_fmt)
+        fmt = money_fmt if col < 3 else pct_fmt
+        ws_dash.write(5, col + 1, val, fmt)
+
+    # VẼ BIỂU ĐỒ TRÒN (PHÂN BỔ TÀI SẢN)
     if not df_port.empty:
-        summary_cat = df_port.groupby('Loại')['Giá trị thị trường'].sum().reset_index()
+        summary_cat = df_port.groupby('Phân khúc')['Giá trị hiện tại'].sum().reset_index()
+        # Ghi data ẩn làm gốc cho Chart
         for i, row in summary_cat.iterrows():
-            ws_dash.write(i+20, 10, row['Loại'])
-            ws_dash.write(i+20, 11, row['Giá trị thị trường'])
-        
-        pie_chart = workbook.add_chart({'type': 'pie'})
-        pie_chart.add_series({
-            'name': 'Cơ cấu Tài sản',
-            'categories': ['📊 Dashboard', 20, 10, 20 + len(summary_cat)-1, 10],
-            'values':     ['📊 Dashboard', 20, 11, 20 + len(summary_cat)-1, 11],
+            ws_dash.write(25 + i, 10, row['Phân khúc'])
+            ws_dash.write(25 + i, 11, row['Giá trị hiện tại'])
+            
+        chart = workbook.add_chart({'type': 'pie'})
+        chart.add_series({
+            'name': 'Cơ cấu Danh mục',
+            'categories': ['📊 Dashboard', 25, 10, 25 + len(summary_cat)-1, 10],
+            'values':     ['📊 Dashboard', 25, 11, 25 + len(summary_cat)-1, 11],
             'data_labels': {'percentage': True, 'position': 'outside_end'},
         })
-        pie_chart.set_title({'name': 'Tỷ trọng Danh mục'})
-        ws_dash.insert_chart('B6', pie_chart)
+        chart.set_title({'name': 'Tỷ trọng Phân bổ Tài sản'})
+        chart.set_style(10)
+        ws_dash.insert_chart('B8', chart, {'x_scale': 1.2, 'y_scale': 1.2})
 
-    # --- SHEET 2: CHI TIẾT DANH MỤC ---
+    # --- SHEET 2: 💼 DANH MỤC CHI TIẾT ---
     if not df_port.empty:
         df_port.to_excel(writer, sheet_name='💼 Danh Mục', index=False)
         ws_p = writer.sheets['💼 Danh Mục']
-        ws_p.set_column('A:E', 12, border_fmt)
-        ws_p.set_column('F:H', 20, money_fmt)
-        ws_p.set_column('I:I', 15, pct_fmt)
+        
+        # Format bảng và Autofit
+        for col_num, value in enumerate(df_port.columns.values):
+            ws_p.write(0, col_num, value, header_fmt)
+            # Autofit logic đơn giản
+            ws_p.set_column(col_num, col_num, 18)
 
-    # --- SHEET 3: NHẬT KÝ GIAO DỊCH ---
-    df_tx.to_excel(writer, sheet_name='📝 Nhật Ký', index=False)
-    ws_tx = writer.sheets['📝 Nhật Ký']
-    ws_tx.set_column('B:B', 20)
-    ws_tx.set_column('H:I', 15, money_fmt)
+        # Áp dụng format tiền và màu sắc lãi lỗ
+        num_rows = len(df_port)
+        ws_p.set_column('D:G', 18, money_fmt)
+        ws_p.set_column('I:I', 15, pct_fmt)
+        
+        # Conditional Formatting cho cột Lãi/Lỗ (Cột H - index 7)
+        ws_p.conditional_format(1, 7, num_rows, 7, {'type': 'cell', 'criteria': '>=', 'value': 0, 'format': green_money_fmt})
+        ws_p.conditional_format(1, 7, num_rows, 7, {'type': 'cell', 'criteria': '<', 'value': 0, 'format': red_money_fmt})
+
+    # --- SHEET 3: 📝 NHẬT KÝ GIAO DỊCH ---
+    df_tx = pd.DataFrame(raw_data) if raw_data else pd.DataFrame()
+    if not df_tx.empty:
+        df_tx.to_excel(writer, sheet_name='📝 Nhật Ký', index=False)
+        ws_tx = writer.sheets['📝 Nhật Ký']
+        ws_tx.freeze_panes(1, 0)
+        for col_num, value in enumerate(df_tx.columns.values):
+            ws_tx.write(0, col_num, value, header_fmt)
+            ws_tx.set_column(col_num, col_num, 15)
+        ws_tx.set_column('H:I', 18, money_fmt)
 
     writer.close()
     output.seek(0)
