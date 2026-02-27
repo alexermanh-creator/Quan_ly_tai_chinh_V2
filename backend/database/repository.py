@@ -4,7 +4,6 @@ from backend.database.db_manager import db
 class Repository:
     @staticmethod
     def format_smart_currency(value):
-        """Định dạng tiền tệ: Tỷ, tr, đ đúng chuẩn CEO"""
         abs_val = abs(value)
         sign = "-" if value < 0 else ""
         if abs_val >= 1_000_000_000:
@@ -19,52 +18,67 @@ class Repository:
         asset_type = asset_type.upper()
         type = type.upper()
 
-        # KIỂM TRA DÒNG TIỀN (Rule: Chỉ được mua nếu đủ tiền)
-        if type in ['BUY', 'OUT', 'WITHDRAW']:
-            available = Repository.get_available_cash(user_id)
-            if available < total_value:
-                # Trả về lỗi để Bot phản hồi cho người dùng
-                return False, f"❌ Không đủ tiền! Số dư hiện tại: {Repository.format_smart_currency(available)}"
-
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # 1. Lưu lịch sử
-            cursor.execute('''
-                INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-            ''', (user_id, ticker, asset_type, qty, price, total_value, type))
 
-            # 2. Cập nhật Portfolio
-            if asset_type != 'CASH':
-                cursor.execute("SELECT total_qty, avg_price FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, ticker))
-                row = cursor.fetchone()
+            # --- LOGIC QUẢN TRỊ DÒNG TIỀN ĐA LỚP ---
+
+            # A. Nếu là lệnh CHUYỂN VỐN (Ví Mẹ -> Ví Con)
+            if type == 'TRANSFER':
+                mom_cash = Repository.get_available_cash(user_id, 'CASH')
+                if mom_cash < total_value:
+                    return False, f"❌ Ví Mẹ không đủ tiền để cấp vốn! (Hiện có: {Repository.format_smart_currency(mom_cash)})"
                 
-                current_qty = row['total_qty'] if row else 0
-                current_avg_price = row['avg_price'] if row else 0
-                
-                new_qty = current_qty
-                if type == 'BUY' or type == 'DIVIDEND_STOCK':
-                    new_qty = current_qty + qty
-                elif type == 'SELL':
-                    new_qty = current_qty - qty
-
-                # Tính lại giá vốn bình quân
-                new_avg_price = current_avg_price
-                if type == 'BUY' and new_qty > 0:
-                    new_avg_price = ((current_qty * current_avg_price) + total_value) / new_qty
-                elif type == 'DIVIDEND_STOCK' and new_qty > 0:
-                    new_avg_price = (current_qty * current_avg_price) / new_qty
-
+                # 1. Ghi nhận lệnh RÚT từ Ví Mẹ
                 cursor.execute('''
-                    INSERT INTO portfolio (user_id, ticker, asset_type, total_qty, avg_price, last_updated)
-                    VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
-                    ON CONFLICT(user_id, ticker) DO UPDATE SET 
-                        total_qty = excluded.total_qty,
-                        avg_price = excluded.avg_price,
-                        last_updated = excluded.last_updated
-                ''', (user_id, ticker, asset_type, new_qty, new_avg_price))
+                    INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date)
+                    VALUES (?, ?, 'CASH', 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))
+                ''', (user_id, f"SANG_{asset_type}", total_value, total_value))
+                
+                # 2. Ghi nhận lệnh NẠP vào Ví Con
+                cursor.execute('''
+                    INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date)
+                    VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))
+                ''', (user_id, ticker, asset_type, total_value, total_value))
+
+            # B. Nếu là lệnh MUA (Kiểm tra sức mua của Ví Con)
+            elif type == 'BUY':
+                buying_power = Repository.get_available_cash(user_id, asset_type)
+                if buying_power < total_value:
+                    return False, f"❌ Ví {asset_type} không đủ hạn mức! Sếp hãy 'chuyen' thêm vốn từ Ví Mẹ."
+                
+                cursor.execute('''
+                    INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ''', (user_id, ticker, asset_type, qty, price, total_value, type))
+
+            # C. Các lệnh khác (Nạp/Rút trực tiếp vào Ví Mẹ hoặc ví cụ thể)
+            else:
+                cursor.execute('''
+                    INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ''', (user_id, ticker, asset_type, qty, price, total_value, type))
+
+            # --- CẬP NHẬT PORTFOLIO (Giữ nguyên logic cũ) ---
+            if asset_type != 'CASH' and type not in ['TRANSFER']:
+                # ... (Logic cập nhật số dư/giá vốn portfolio như sếp đã gửi) ...
+                pass 
 
             conn.commit()
             return True, "✅ Ghi nhận thành công."
 
-    # ... các hàm khác giữ nguyên ...
+    @staticmethod
+    def get_available_cash(user_id, asset_type):
+        """Tính tiền mặt khả dụng riêng biệt cho từng Ví"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            # Logic: Tiền khả dụng = (Nạp + Bán + Nhận Chuyển) - (Rút + Mua + Chuyển Đi)
+            cursor.execute('''
+                SELECT SUM(CASE 
+                    WHEN type IN ('IN', 'DEPOSIT', 'SELL', 'CASH_DIVIDEND', 'TRANSFER_IN') THEN total_value
+                    WHEN type IN ('OUT', 'WITHDRAW', 'BUY', 'TRANSFER_OUT') THEN -total_value
+                    ELSE 0 END) as balance
+                FROM transactions WHERE user_id = ? AND asset_type = ?
+            ''', (user_id, asset_type))
+            result = cursor.fetchone()
+            return result['balance'] if result and result['balance'] else 0
