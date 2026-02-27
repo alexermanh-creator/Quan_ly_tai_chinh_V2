@@ -18,7 +18,6 @@ class StockModule(BaseModule):
             cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
-        # GIÁ TRỊ VỐN TỪ DATABASE (ĐÃ CHUẨN)
         total_cost = sum(r['total_qty'] * r['avg_price'] for r in rows)
         
         res = [
@@ -27,16 +26,15 @@ class StockModule(BaseModule):
             f"💰 Tổng giá trị: <b>{self.format_smart(total_cost + bp_stock)}</b>",
             f"💵 Tổng vốn đầu tư: {self.format_smart(total_cost)}",
             f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
-            f"📈 Lãi/Lỗ: 0đ (+0.0%)",
-            f"📊 Tỉ trọng lớn: {rows[0]['ticker'] if rows else '---'}",
+            f"📊 Tỉ trọng lớn nhất: {rows[0]['ticker'] if rows else '---'}",
             "━━━━━━━━━━━━━━━━━━━"
         ]
 
         if not rows:
-            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào)</i>")
+            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào trong ví này)</i>")
         else:
             for r in rows:
                 val = r['total_qty'] * r['avg_price']
-                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n• GT: {self.format_smart(val)}")
+                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(val)}")
         
         return "\n".join(res)
