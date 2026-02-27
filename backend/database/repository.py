@@ -14,27 +14,22 @@ class Repository:
     def save_transaction(user_id, ticker, asset_type, qty, price, total_value, type):
         ticker, asset_type, type = ticker.upper(), asset_type.upper(), type.upper()
 
+        # LOGIC PLUG & PLAY: Tự động điều phối dòng tiền Mẹ-Con
         if type == 'TRANSFER':
-            # Logic thông minh: Nếu đích là CASH thì nguồn là STOCK (giả định lệnh rút từ menu Stock)
-            # Nếu đích là STOCK/CRYPTO thì nguồn là CASH (Ví Mẹ cấp vốn)
+            # Nếu đích là CASH -> Rút từ ví con về Mẹ. Ngược lại là Cấp vốn.
             is_withdrawal = (asset_type == 'CASH')
-            source = "STOCK" if is_withdrawal else "CASH"
-            target = asset_type
+            source = ticker.replace('MOVE_', '') if is_withdrawal else 'CASH'
+            target = 'CASH' if is_withdrawal else asset_type
             
             if Repository.get_available_cash(user_id, source) < total_value:
                 return False, f"❌ Ví {source} không đủ tiền mặt!"
 
-            try:
-                with db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    # Lệnh chi từ nguồn
-                    cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
-                    # Lệnh thu vào đích
-                    cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"FROM_{source}", target, total_value, total_value))
-                    conn.commit()
-                return True, f"✅ Đã điều vốn {Repository.format_smart_currency(total_value)} sang {target}."
-            except Exception as e:
-                return False, f"⚠️ Lỗi SQL: {str(e)}"
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
+                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', target, total_value, total_value))", (user_id, f"FROM_{source}", target, total_value, total_value))
+                conn.commit()
+            return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)} sang {target}."
 
         if type == 'BUY' and Repository.get_available_cash(user_id, asset_type) < total_value:
             return False, f"❌ Ví {asset_type} không đủ hạn mức!"
@@ -46,12 +41,8 @@ class Repository:
                 cursor.execute("SELECT total_qty, avg_price FROM portfolio WHERE user_id=? AND ticker=?", (user_id, ticker))
                 row = cursor.fetchone()
                 cq, cp = (row[0], row[1]) if row else (0, 0)
-                if type == 'BUY':
-                    nq = cq + qty
-                    np = ((cq * cp) + total_value) / nq if nq > 0 else 0
-                else:
-                    nq = max(0, cq - qty)
-                    np = cp if nq > 0 else 0
+                nq = cq + qty if type == 'BUY' else max(0, cq - qty)
+                np = ((cq * cp) + total_value) / nq if type == 'BUY' and nq > 0 else cp
                 cursor.execute("INSERT INTO portfolio (user_id, ticker, asset_type, total_qty, avg_price, last_updated) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) ON CONFLICT(user_id, ticker) DO UPDATE SET total_qty=excluded.total_qty, avg_price=excluded.avg_price, last_updated=excluded.last_updated", (user_id, ticker, asset_type, nq, np))
             conn.commit()
         return True, "✅ Thành công."
