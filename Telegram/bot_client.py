@@ -19,9 +19,19 @@ class FinanceBot:
         self._register_handlers()
 
     def get_menu(self, menu_type="HOME"):
+        # Layout cân xứng: Hàng 1 full rộng cho nút chính
         menus = {
-            "HOME": [[KeyboardButton("💼 Tài sản của bạn")], [KeyboardButton("📊 Chứng Khoán"), KeyboardButton("🪙 Crypto")], [KeyboardButton("🔄 Làm mới")]],
-            "STOCK": [[KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")], [KeyboardButton("🏠 Trang chủ")]]
+            "HOME": [
+                [KeyboardButton("💼 Tài sản của bạn")],
+                [KeyboardButton("📊 Chứng Khoán"), KeyboardButton("🪙 Crypto")],
+                [KeyboardButton("🥇 Tài sản khác"), KeyboardButton("📜 Lịch sử")],
+                [KeyboardButton("📊 Báo cáo"), KeyboardButton("🤖 AI Chat")],
+                [KeyboardButton("⚙️ Cài đặt"), KeyboardButton("📥 EXPORT/IMPORT")]
+            ],
+            "STOCK": [
+                [KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")],
+                [KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ")]
+            ]
         }
         return ReplyKeyboardMarkup(menus.get(menu_type, menus["HOME"]), resize_keyboard=True)
 
@@ -29,7 +39,7 @@ class FinanceBot:
         if update.effective_user.id != ADMIN_ID: return
         text, user_id = update.message.text, update.effective_user.id
 
-        if text in ["💼 Tài sản của bạn", "🏠 Trang chủ", "🔄 Làm mới"]:
+        if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
             await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=self.get_menu("HOME"))
         elif text == "📊 Chứng Khoán":
             await update.message.reply_html(StockModule(user_id).run(), reply_markup=self.get_menu("STOCK"))
