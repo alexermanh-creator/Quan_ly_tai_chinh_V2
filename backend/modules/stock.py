@@ -29,8 +29,7 @@ class StockModule(BaseModule):
             "📊 <b>DANH MỤC CỔ PHIẾU</b>\n━━━━━━━━━━━━━━━━━━━",
             f"💰 Tổng giá trị: <b>{self.format_smart(total_val)}</b>",
             f"💵 Vốn đầu tư: {self.format_smart(total_cost)}",
-            f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
-            f"📈 Lãi/Lỗ: 0đ (+0.0%)\n━━━━━━━━━━━━━━━━━━━",
+            f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>\n━━━━━━━━━━━━━━━━━━━",
             f"⬆️ Tổng nạp ví: {self.format_smart(t_in)}",
             f"⬇️ Tổng rút ví: {self.format_smart(t_out)}",
             f"📊 Tỉ trọng lớn: {sorted_rows[0]['ticker'] if sorted_rows else '---'}\n━━━━━━━━━━━━━━━━━━━"
