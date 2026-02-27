@@ -38,6 +38,7 @@ class DashboardModule(BaseModule):
             "━━━━━━━━━━━━━━━━━━━\n"
             f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>\n"
             f"⬆️ Tổng nạp: {self.format_smart(t_in)}\n"
+            f"⬇️ Tổng rút: {self.format_smart(t_out)}\n"
             f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl)} ({roi:+.1f}%)</b>\n\n"
             "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>\n"
             f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢\n"
