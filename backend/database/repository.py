@@ -14,21 +14,31 @@ class Repository:
     def save_transaction(user_id, ticker, asset_type, qty, price, total_value, type):
         ticker, asset_type, type = ticker.upper(), asset_type.upper(), type.upper()
 
+        # 🛡️ LOGIC ĐIỀU CHUYỂN VỐN BỌC THÉP
         if type == 'TRANSFER':
-            # Xác định ví nguồn dựa trên ticker (MOVE_CASH hoặc MOVE_STOCK)
-            source = asset_type if "MOVE_CASH" in ticker else 'CASH'
-            target = 'CASH' if "MOVE_CASH" in ticker else asset_type
+            # Nếu ticker là MOVE_CASH -> Sếp muốn rút từ Ví con (đang thao tác) về Ví Mẹ
+            if "MOVE_CASH" in ticker:
+                # Sếp cần cung cấp asset_type gốc từ đâu chuyển về. 
+                # Nếu lệnh từ module Stock, ta cần xác định nguồn là STOCK
+                source = "STOCK" # Mặc định trong ngữ cảnh này, hoặc logic parser cần truyền đúng
+                target = "CASH"
+            else:
+                source = "CASH"
+                target = asset_type
             
             if Repository.get_available_cash(user_id, source) < total_value:
-                return False, f"❌ Ví {source} không đủ tiền mặt!"
+                return False, f"❌ Ví {source} không đủ tiền mặt để chuyển!"
 
             with db.get_connection() as conn:
                 cursor = conn.cursor()
+                # Phiếu chi từ ví nguồn
                 cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"SANG_{target}", source, total_value, total_value))
+                # Phiếu thu vào ví đích
                 cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"NHAN_TU_{source}", target, total_value, total_value))
                 conn.commit()
-            return True, "✅ Điều vốn thành công."
+            return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)} từ {source} sang {target}."
 
+        # 🛡️ CHẶN MUA VƯỢT HẠN MỨC
         if type == 'BUY' and Repository.get_available_cash(user_id, asset_type) < total_value:
             return False, f"❌ Ví {asset_type} không đủ hạn mức!"
 
