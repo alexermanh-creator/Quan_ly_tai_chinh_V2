@@ -15,17 +15,17 @@ class StockModule(BaseModule):
         bp_stock = repo.get_available_cash(user_id, 'STOCK')
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
-            t_in = cursor.fetchone()[0] or 0
-            cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
+            cursor.execute("SELECT ticker, total_qty, avg_price, market_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
         total_cost = sum(r['total_qty'] * r['avg_price'] for r in rows)
-        # Giả lập lãi lỗ dựa trên chênh lệch (Trong thực tế sẽ dùng API)
-        res_pnl = 0 # Ở bản này sếp chưa nạp giá mới nên tạm thời vẫn 0
-        
+        # Tính giá trị theo giá thị trường (nhân multiplier 1000 cho VNĐ)
+        total_market_val = sum(r['total_qty'] * (r['market_price'] or r['avg_price']) * 1000 for r in rows)
+        pnl = sum(r['total_qty'] * ((r['market_price'] or r['avg_price']) - r['avg_price']) * 1000 for r in rows)
+        roi = (pnl / (total_cost * 1000) * 100) if total_cost > 0 else 0
+
         if mode == "ANALYZE":
-            if not rows: return "❌ Sếp chưa nắm giữ mã nào để phân tích."
+            if not rows: return "❌ Chưa có mã nào."
             analyze = ["📈 <b>PHÂN TÍCH TỈ TRỌNG</b>\n━━━━━━━━━━━━━━━━━━━"]
             for r in rows:
                 pct = (r['total_qty'] * r['avg_price'] / total_cost * 100) if total_cost > 0 else 0
@@ -34,12 +34,14 @@ class StockModule(BaseModule):
 
         res = [
             "📊 <b>DANH MỤC CỔ PHIẾU</b>\n━━━━━━━━━━━━━━━━━━━",
-            f"💰 Tổng giá trị: <b>{self.format_smart(total_cost + bp_stock)}</b>",
-            f"💵 Vốn đầu tư: {self.format_smart(total_cost)}",
+            f"💰 Tổng giá trị: <b>{self.format_smart(total_market_val + bp_stock)}</b>",
+            f"💵 Vốn đầu tư: {self.format_smart(total_cost * 1000)}",
             f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
-            f"📈 Lãi/Lỗ: 0đ (+0.0%)\n━━━━━━━━━━━━━━━━━━━",
+            f"📈 Lãi/Lỗ: <b>{self.format_smart(pnl)} ({roi:+.1f}%)</b>\n━━━━━━━━━━━━━━━━━━━",
             f"📊 Tỉ trọng lớn: {max(rows, key=lambda x: x['total_qty']*x['avg_price'])['ticker'] if rows else '---'}\n━━━━━━━━━━━━━━━━━━━"
         ]
         for r in rows:
-            res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(r['total_qty'] * r['avg_price'])}")
+            m_price = r['market_price'] or r['avg_price']
+            i_pnl = r['total_qty'] * (m_price - r['avg_price']) * 1000
+            res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• Giá HT: {m_price:,.0f}\n• Lãi/Lỗ: {self.format_smart(i_pnl)}")
         return "\n".join(res)
