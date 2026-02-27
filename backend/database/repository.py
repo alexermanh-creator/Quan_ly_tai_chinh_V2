@@ -27,24 +27,30 @@ class Repository:
     @staticmethod
     def save_transaction(user_id, ticker, asset_type, qty, price, total_value, type):
         ticker, asset_type, type = ticker.upper(), asset_type.upper(), type.upper()
+
         if type == 'TRANSFER':
             target = asset_type
             source = "CASH" if target != "CASH" else ticker.replace("MOVE_", "")
-            if source == "CASH" and target == "CASH": source = "STOCK" 
             if Repository.get_available_cash(user_id, source) < total_value:
-                return False, f"❌ Ví {source} không đủ tiền!"
+                return False, f"❌ Ví {source} không đủ tiền để chuyển!"
+
             with db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
                 cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"FROM_{source}", target, total_value, total_value))
                 conn.commit()
-            return True, f"✅ Đã điều vốn {Repository.format_smart_currency(total_value)}."
-        if type == 'BUY' and Repository.get_available_cash(user_id, asset_type) < total_value:
-            return False, f"❌ Ví {asset_type} không đủ sức mua!"
+            return True, "✅ Chuyển vốn thành công."
+
+        # CHỐT CHẶN THIẾT QUÂN LUẬT: Chặn mua khống
+        if type == 'BUY':
+            available = Repository.get_available_cash(user_id, asset_type)
+            if available < total_value:
+                return False, f"❌ Ví {asset_type} thiếu {Repository.format_smart_currency(total_value - available)} để mua!"
+
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))", (user_id, ticker, asset_type, qty, price, total_value, type))
-            if asset_type != 'CASH' and type in ['BUY', 'SELL']:
+            if asset_type != 'CASH':
                 cursor.execute("SELECT total_qty, avg_price FROM portfolio WHERE user_id=? AND ticker=?", (user_id, ticker))
                 row = cursor.fetchone()
                 cq, cp = (row[0], row[1]) if row else (0, 0)
@@ -52,6 +58,6 @@ class Repository:
                 np = ((cq * cp) + total_value) / nq if type == 'BUY' and nq > 0 else cp
                 cursor.execute("INSERT INTO portfolio (user_id, ticker, asset_type, total_qty, avg_price, last_updated) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) ON CONFLICT(user_id, ticker) DO UPDATE SET total_qty=excluded.total_qty, avg_price=excluded.avg_price, last_updated=excluded.last_updated", (user_id, ticker, asset_type, nq, np))
             conn.commit()
-        return True, "✅ Thành công."
+        return True, "✅ Ghi nhận thành công."
 
 repo = Repository()
