@@ -19,8 +19,6 @@ class DashboardModule(BaseModule):
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            
-            # Tính giá trị tài sản hiện có (Hàng hóa)
             cursor.execute("SELECT SUM(total_qty * avg_price) FROM portfolio WHERE user_id=?", (user_id,))
             inv_val = cursor.fetchone()[0] or 0
             
@@ -32,7 +30,6 @@ class DashboardModule(BaseModule):
             net_inv = t_in - t_out
             pnl = total_assets - net_inv
             roi = (pnl / net_inv * 100) if net_inv > 0 else 0
-            total_bp = c_mom + c_stock + c_crypto
 
         return (
             "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>\n"
@@ -40,13 +37,12 @@ class DashboardModule(BaseModule):
             f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>\n"
             f"⬆️ Tổng nạp: {self.format_smart(t_in)}\n"
             f"⬇️ Tổng rút: {self.format_smart(t_out)}\n"
-            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl)} ({roi:+.1f}%)</b>\n\n"
+            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl)} ({roi:+.2f}%)</b>\n\n"
             "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>\n"
             f"• Vốn Đầu tư (Mẹ): {self.format_smart(c_mom)} 🟢\n"
             f"• Ví Stock: (💵 {self.format_smart(c_stock)})\n"
             f"• Ví Crypto: (💵 {self.format_smart(c_crypto)})\n\n"
             "🛡️ <b>SỨC KHỎE DANH MỤC:</b>\n"
-            f"• Trạng thái: {'An toàn' if total_assets > 0 else '---'}\n"
-            f"• Sức mua tổng: <b>{self.format_smart(total_bp)}</b>\n"
+            f"• Sức mua tổng: <b>{self.format_smart(c_mom + c_stock + c_crypto)}</b>\n"
             "━━━━━━━━━━━━━━━━━━━"
         )
