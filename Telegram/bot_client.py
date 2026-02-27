@@ -43,6 +43,17 @@ class FinanceBot:
             if p:
                 success, msg = repo.save_transaction(user_id, p['ticker'], p['asset_type'], p['qty'], p['price'], p['total_val'], p['action'])
                 await update.message.reply_html(f"✅ Ghi nhận: {text.upper()}" if success else msg, reply_markup=self.get_menu())
+        # Telegram/bot_client.py
+# ... (Giữ nguyên phần đầu)
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text, user_id = update.message.text, update.effective_user.id
+        if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
+            await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=self.get_menu("HOME"))
+        elif text == "📊 Chứng Khoán":
+            await update.message.reply_html(StockModule(user_id).run(), reply_markup=self.get_menu("STOCK"))
+        elif text == "📈 Báo cáo nhóm":
+            await update.message.reply_html(StockModule(user_id).run(mode="ANALYZE"), reply_markup=self.get_menu("STOCK"))
+        # ... (Các nút khác giữ nguyên)
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("Sẵn sàng!", reply_markup=self.get_menu())))
@@ -51,3 +62,4 @@ class FinanceBot:
     def run(self): self.app.run_polling()
 
 bot_app = FinanceBot()
+
