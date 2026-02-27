@@ -6,10 +6,8 @@ from backend.database.repository import repo
 class StockModule(BaseModule):
     def format_smart(self, value):
         abs_v = abs(value)
-        sign = "-" if value < 0 else ""
-        if abs_v >= 1e9: return f"{sign}{value/1e9:.2f} tỷ"
-        if abs_v >= 1e6: return f"{sign}{value/1e6:,.1f}tr"
-        return f"{sign}{value:,.0f}đ"
+        if abs_v >= 1e9: return f"{value/1e9:.2f} tỷ"
+        return f"{value/1e6:,.1f}tr"
 
     def run(self):
         user_id = self.user_id
@@ -17,7 +15,6 @@ class StockModule(BaseModule):
         
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # Thống kê nạp/rút riêng của ví Stock
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_OUT'", (user_id,))
