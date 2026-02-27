@@ -1,68 +1,47 @@
 # backend/modules/stock.py
 from backend.interface import BaseModule
 from backend.database.db_manager import db
+from backend.database.repository import repo
 
 class StockModule(BaseModule):
-    def format_m(self, value):
-        return f"{value / 1_000_000:,.1f}M"
+    def format_smart(self, value):
+        abs_v = abs(value)
+        if abs_v >= 1_000_000_000: return f"{value/1_000_000_000:.2f} tỷ"
+        return f"{value/1_000_000:,.1f}tr"
 
     def run(self):
+        user_id = self.user_id
+        bp_stock = repo.get_available_cash(user_id, 'STOCK')
+        
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # Lấy giá manual để tính giá thị trường
-            cursor.execute("SELECT ticker, current_price FROM manual_prices")
-            price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
+            # Lấy nạp/rút riêng của ví Stock (từ lệnh chuyen)
+            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
+            t_in = cursor.fetchone()[0] or 0
             
-            # Lấy số dư cổ phiếu
-            cursor.execute("SELECT * FROM portfolio WHERE user_id = ? AND asset_type = 'STOCK'", (self.user_id,))
+            cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = cursor.fetchall()
-            
-            if not rows: return "📊 <b>DANH MỤC CỔ PHIẾU</b>\n\nChưa có dữ liệu."
 
-            # Tính toán các chỉ số tổng của Ví Stock
-            total_cost = sum(r['total_qty'] * r['avg_price'] * 1000 for r in rows)
-            total_mkt = sum(r['total_qty'] * price_map.get(r['ticker'], r['avg_price']) * 1000 for r in rows)
-            
-            stock_details = []
-            stats = []
-
-            for r in rows:
-                tk = r['ticker']
-                curr_p = price_map.get(tk, r['avg_price'])
-                mkt_val = r['total_qty'] * curr_p * 1000
-                cost_val = r['total_qty'] * r['avg_price'] * 1000
-                pnl = mkt_val - cost_val
-                roi = (pnl / cost_val * 100) if cost_val > 0 else 0
-                
-                stats.append({'ticker': tk, 'roi': roi, 'value': mkt_val})
-                
-                # Layout chi tiết mã với đường kẻ mờ (────────────)
-                detail = (
-                    f"💎 <b>{tk}</b>\n"
-                    f"• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n"
-                    f"• Hiện tại: {curr_p:,.1f} | GT: {self.format_m(mkt_val)}\n"
-                    f"• Lãi: {pnl:,.0f}đ ({roi:+.1f}%)"
-                )
-                stock_details.append(detail)
-
-            best = max(stats, key=lambda x: x['roi'])
-            worst = min(stats, key=lambda x: x['roi'])
-            biggest = max(stats, key=lambda x: x['value'])
-
-        lines = [
+        # Layout mặc định khi chưa có hàng
+        total_cost = sum(r['total_qty'] * r['avg_price'] * 1000 for r in rows) if rows else 0
+        
+        res = [
             "📊 <b>DANH MỤC CỔ PHIẾU</b>",
             "━━━━━━━━━━━━━━━━━━━",
-            f"💰 Tổng giá trị: {self.format_m(total_mkt)}",
-            f"💵 Tổng vốn: {self.format_m(total_cost)}",
-            f"💸 Sức mua: 0đ", # Có thể tích hợp thêm ví phụ sau
-            f"📈 Lãi/Lỗ: {self.format_m(total_mkt - total_cost)} ({((total_mkt-total_cost)/total_cost*100):+.1f}%)",
-            f"⬆️ Tổng nạp ví: {self.format_m(total_cost)}",
+            f"💰 Tổng giá trị: {self.format_smart(total_cost + bp_stock)}",
+            f"💵 Tổng vốn: {self.format_smart(total_cost)}",
+            f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
+            f"📈 Lãi/Lỗ: 0.0tr (+0.0%)",
+            f"⬆️ Tổng nạp ví: {self.format_smart(t_in)}",
             f"⬇️ Tổng rút ví: 0đ",
-            f"🏆 Mã tốt nhất: {best['ticker']} ({best['roi']:+.1f}%)",
-            f"📉 Mã kém nhất: {worst['ticker']} ({worst['roi']:+.1f}%)",
-            f"📊 Tỉ trọng lớn nhất: {biggest['ticker']} ({(biggest['value']/total_mkt*100):.1f}%)",
-            "────────────",
-            "\n────────────\n".join(stock_details),
             "━━━━━━━━━━━━━━━━━━━"
         ]
-        return "\n".join(lines)
+
+        if not rows:
+            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào trong danh mục này)</i>")
+        else:
+            # Thêm chi tiết từng mã nếu có
+            for r in rows:
+                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n• GT: {self.format_smart(r['total_qty']*r['avg_price']*1000)}")
+
+        return "\n".join(res)
