@@ -1,6 +1,7 @@
 # backend/modules/dashboard.py
 from backend.interface import BaseModule
 from backend.database.db_manager import db
+from backend.database.repository import repo
 
 class DashboardModule(BaseModule):
     def format_currency(self, value):
@@ -11,13 +12,13 @@ class DashboardModule(BaseModule):
         return f"{sign}{value:,.0f}đ"
 
     def run(self):
-        EX_RATE = 26300 
+        EX_RATE = 26300  # CEO có thể điều chỉnh hoặc lấy từ settings
         GOAL = 500_000_000 
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. VỐN NẠP HỆ THỐNG
+            # 1. VỐN NẠP RÒNG (Lấy từ Repository)
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'IN'", (self.user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'OUT'", (self.user_id,))
@@ -25,51 +26,43 @@ class DashboardModule(BaseModule):
             net_invested = t_in - t_out
 
             # 2. TIỀN MẶT KHẢ DỤNG
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND type = 'BUY' AND asset_type != 'CASH'", (self.user_id,))
-            total_spent = cursor.fetchone()[0] or 0
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND type = 'SELL' AND asset_type != 'CASH'", (self.user_id,))
-            total_received = cursor.fetchone()[0] or 0
-            cash_balance = net_invested - total_spent + total_received
+            cash_balance = repo.get_available_cash(self.user_id)
 
-            # 3. GIÁ TRỊ THỊ TRƯỜNG STOCK
+            # 3. GIÁ TRỊ THỊ TRƯỜNG (Lấy từ bảng Portfolio đã hợp nhất)
             cursor.execute("SELECT ticker, current_price FROM manual_prices")
             price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
             
-            cursor.execute('''
-                SELECT ticker, SUM(CASE WHEN type='BUY' THEN qty ELSE -qty END) as current_qty
-                FROM transactions WHERE user_id = ? AND asset_type = 'STOCK' GROUP BY ticker
-            ''', (self.user_id,))
-            stocks = cursor.fetchall()
+            cursor.execute("SELECT ticker, asset_type, total_qty, avg_price FROM portfolio WHERE user_id = ?", (self.user_id,))
+            portfolio_rows = cursor.fetchall()
             
             stock_mkt_val = 0
-            for s in stocks:
-                qty = s['current_qty']
-                if qty > 0:
-                    tk = s['ticker']
-                    # Ưu tiên lấy giá lệnh cuối cùng
-                    cursor.execute("SELECT price FROM transactions WHERE ticker=? AND user_id=? ORDER BY date DESC LIMIT 1", (tk, self.user_id))
-                    last_p = cursor.fetchone()[0]
-                    # Ghi đè bằng giá manual nếu có
-                    price = price_map.get(tk, last_p)
+            crypto_vnd = 0
+            other_val = 0
+
+            for row in portfolio_rows:
+                qty = row['total_qty']
+                if qty <= 0: continue
+                
+                ticker = row['ticker']
+                # Ưu tiên giá manual, nếu không có lấy giá vốn trung bình
+                price = price_map.get(ticker, row['avg_price'])
+                
+                if row['asset_type'] == 'STOCK':
                     stock_mkt_val += qty * price * 1000
+                elif row['asset_type'] == 'CRYPTO':
+                    # Quy đổi USD sang VND nếu giá lưu là USD
+                    crypto_vnd += qty * price * EX_RATE
+                elif row['asset_type'] == 'OTHER':
+                    other_val += qty * price
 
-            # 4. CRYPTO & KHÁC
-            cursor.execute('''
-                SELECT SUM(CASE WHEN type='BUY' THEN qty ELSE -qty END * price) 
-                FROM transactions WHERE user_id = ? AND asset_type = 'CRYPTO'
-            ''', (self.user_id,))
-            crypto_vnd = (cursor.fetchone()[0] or 0) * EX_RATE
-
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'OTHER'", (self.user_id,))
-            other_val = cursor.fetchone()[0] or 0
-
-            # 5. TỔNG KẾT
+            # 4. TỔNG KẾT & CHỈ SỐ
             total_assets = cash_balance + stock_mkt_val + crypto_vnd + other_val
             profit = total_assets - net_invested
             roi = (profit / net_invested * 100) if net_invested > 0 else 0
             progress = (total_assets / GOAL * 100)
             remain = max(0, GOAL - total_assets)
 
+        # Layout đúng như thống nhất
         lines = [
             "💼 <b>TÀI SẢN CỦA BẠN</b>",
             f"💰 Tổng: <b>{self.format_currency(total_assets)}</b>",
