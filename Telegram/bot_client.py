@@ -14,7 +14,10 @@ class FinanceBot:
 
     def get_menu(self, menu_type="HOME"):
         if menu_type == "STOCK":
-            return ReplyKeyboardMarkup([[KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")], [KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ")]], resize_keyboard=True)
+            return ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")],
+                [KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ")]
+            ], resize_keyboard=True)
         return ReplyKeyboardMarkup([
             [KeyboardButton("💼 Tài sản của bạn")],
             [KeyboardButton("📊 Chứng Khoán"), KeyboardButton("🪙 Crypto")],
@@ -30,7 +33,7 @@ class FinanceBot:
         elif text == "📊 Chứng Khoán":
             await update.message.reply_html(StockModule(user_id).run(), reply_markup=self.get_menu("STOCK"))
         elif text == "➕ Giao dịch":
-            await update.message.reply_html("📝 <b>Lệnh mẫu:</b> <code>HPG 1000 28.5</code>", reply_markup=self.get_menu("STOCK"))
+            await update.message.reply_html("📝 <b>Lệnh mẫu:</b> <code>s HPG 1000 28.5</code>", reply_markup=self.get_menu("STOCK"))
         elif text == "🔄 Cập nhật giá":
             await update.message.reply_html("🔍 Đang đồng bộ giá thị trường...", reply_markup=self.get_menu("STOCK"))
         elif text == "📈 Báo cáo nhóm":
@@ -39,7 +42,7 @@ class FinanceBot:
             p = CommandParser.parse_transaction(text)
             if p:
                 success, msg = repo.save_transaction(user_id, p['ticker'], p['asset_type'], p['qty'], p['price'], p['total_val'], p['action'])
-                await update.message.reply_html(f"✅ Ghi nhận: {text.upper()}" if success else msg, reply_markup=self.get_menu("HOME"))
+                await update.message.reply_html(f"✅ Ghi nhận: {text.upper()}" if success else msg, reply_markup=self.get_menu())
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("Sẵn sàng!", reply_markup=self.get_menu())))
