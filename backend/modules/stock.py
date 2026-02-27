@@ -1,55 +1,62 @@
-# backend/modules/stock.py
+# backend/modules/dashboard.py
 from backend.interface import BaseModule
 from backend.database.db_manager import db
 from backend.database.repository import repo
 
-class StockModule(BaseModule):
+class DashboardModule(BaseModule):
     def format_smart(self, value):
         abs_v = abs(value)
         sign = "-" if value < 0 else ""
         if abs_v >= 1e9: return f"{sign}{value/1e9:.2f} tỷ"
-        return f"{sign}{value/1e6:,.1f}tr"
+        if abs_v >= 1e6: return f"{sign}{value/1e6:,.1f}tr"
+        return f"{sign}{abs_v:,.0f}đ"
 
     def run(self):
         user_id = self.user_id
-        bp_stock = repo.get_available_cash(user_id, 'STOCK')
-        
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # Tính tổng nạp/rút riêng của ví Stock để CEO kiểm soát dòng tiền
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
+            # 1. Nạp/Rút gốc tại Ví Mẹ
+            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_OUT'", (user_id,))
+            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
             
-            cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
-            rows = [dict(r) for r in cursor.fetchall()]
-
-        total_cost = sum(r['total_qty'] * r['avg_price'] for r in rows)
-        total_val = total_cost + bp_stock
-        
-        # Sắp xếp để tìm mã tỉ trọng lớn nhất
-        sorted_rows = sorted(rows, key=lambda x: x['total_qty'] * x['avg_price'], reverse=True)
+            # 2. Giá trị tài sản đang nắm giữ (Giá vốn)
+            cursor.execute("SELECT asset_type, SUM(total_qty * avg_price) FROM portfolio WHERE user_id=? GROUP BY asset_type", (user_id,))
+            costs = {r[0]: r[1] for r in cursor.fetchall()}
+            
+            stock_val = costs.get('STOCK', 0)
+            crypto_val = costs.get('CRYPTO', 0)
+            
+            # 3. Tiền mặt (Sức mua) tại từng ví
+            cash_mom = repo.get_available_cash(user_id, 'CASH')
+            bp_stock = repo.get_available_cash(user_id, 'STOCK')
+            bp_crypto = repo.get_available_cash(user_id, 'CRYPTO')
+            
+            # 4. Tổng hợp chỉ số
+            total_assets = cash_mom + bp_stock + bp_crypto + stock_val + crypto_val
+            net_invested = t_in - t_out
+            pnl_total = total_assets - net_invested
+            roi = (pnl_total / net_invested * 100) if net_invested > 0 else 0
+            total_bp = cash_mom + bp_stock + bp_crypto
+            cash_pct = (total_bp / total_assets * 100) if total_assets > 0 else 0
 
         res = [
-            "📊 <b>DANH MỤC CỔ PHIẾU</b>",
+            "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>",
             "━━━━━━━━━━━━━━━━━━━",
-            f"💰 Tổng giá trị: <b>{self.format_smart(total_val)}</b>",
-            f"💵 Vốn đầu tư: {self.format_smart(total_cost)}",
-            f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
-            f"📈 Lãi/Lỗ: 0đ (+0.0%)",
-            "━━━━━━━━━━━━━━━━━━━",
-            f"⬆️ Tổng nạp ví: {self.format_smart(t_in)}",
-            f"⬇️ Tổng rút ví: {self.format_smart(t_out)}",
-            f"📊 Tỉ trọng lớn: {sorted_rows[0]['ticker'] if sorted_rows else '---'}",
+            f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>",
+            f"⬆️ Tổng nạp: {self.format_smart(t_in)}",
+            f"⬇️ Tổng rút: {self.format_smart(t_out)}",
+            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl_total)} ({roi:+.1f}%)</b>",
+            "",
+            "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>",
+            f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢",
+            f"• Ví Stock: {self.format_smart(stock_val)} (💵 {self.format_smart(bp_stock)})",
+            f"• Ví Crypto: {self.format_smart(crypto_val)} (💵 {self.format_smart(bp_crypto)})",
+            "",
+            "🛡️ <b>SỨC KHỎE DANH MỤC:</b>",
+            f"• Trạng thái: {'An toàn' if cash_pct > 30 else 'Cần chú ý'} (Tiền mặt: {cash_pct:.0f}%)",
+            f"• Sức mua tổng: <b>{self.format_smart(total_bp)}</b>",
             "━━━━━━━━━━━━━━━━━━━"
         ]
-
-        if not rows:
-            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào trong ví này)</i>")
-        else:
-            for r in rows:
-                val = r['total_qty'] * r['avg_price']
-                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(val)}")
-        
         return "\n".join(res)
