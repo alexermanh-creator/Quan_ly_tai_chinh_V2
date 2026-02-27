@@ -22,14 +22,15 @@ class Repository:
             if Repository.get_available_cash(user_id, source) < total_value:
                 return False, f"❌ Ví {source} không đủ tiền mặt!"
 
-            with db.get_connection() as conn:
-                cursor = conn.cursor()
-                # Ghi nhận phiếu chi từ nguồn
-                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
-                # Ghi nhận phiếu thu vào đích
-                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"FROM_{source}", target, total_value, total_value))
-                conn.commit()
-            return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)}."
+            try:
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
+                    cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"FROM_{source}", target, total_value, total_value))
+                    conn.commit()
+                return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)} sang {target}."
+            except Exception as e:
+                return False, f"⚠️ Lỗi SQL: {str(e)}"
 
         if type == 'BUY' and Repository.get_available_cash(user_id, asset_type) < total_value:
             return False, f"❌ Ví {asset_type} không đủ hạn mức!"
@@ -51,21 +52,8 @@ class Repository:
     def get_available_cash(user_id, asset_type):
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT SUM(CASE 
-                    WHEN type IN ('IN', 'SELL', 'TRANSFER_IN', 'CASH_DIVIDEND') THEN total_value 
-                    WHEN type IN ('OUT', 'BUY', 'TRANSFER_OUT') THEN -total_value 
-                    ELSE 0 END) 
-                FROM transactions WHERE user_id = ? AND asset_type = ?
-            """, (user_id, asset_type))
+            cursor.execute("SELECT SUM(CASE WHEN type IN ('IN', 'SELL', 'TRANSFER_IN', 'CASH_DIVIDEND') THEN total_value WHEN type IN ('OUT', 'BUY', 'TRANSFER_OUT') THEN -total_value ELSE 0 END) FROM transactions WHERE user_id = ? AND asset_type = ?", (user_id, asset_type))
             res = cursor.fetchone()[0]
             return res if res else 0
-
-    @staticmethod
-    def set_setting(key, value, user_id):
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO settings (key, value, user_id) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value), user_id))
-            conn.commit()
 
 repo = Repository()
