@@ -15,51 +15,39 @@ class DashboardModule(BaseModule):
         user_id = self.user_id
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # 1. Tính Tổng Nạp/Rút thực tế vào hệ thống (Ví Mẹ)
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            
-            # 2. Tính Giá trị tài sản đang nắm giữ (Giá vốn trong Portfolio)
             cursor.execute("SELECT asset_type, SUM(total_qty * avg_price) FROM portfolio WHERE user_id=? GROUP BY asset_type", (user_id,))
             costs = {r[0]: r[1] for r in cursor.fetchall()}
             
-            stock_cost = costs.get('STOCK', 0)
-            crypto_cost = costs.get('CRYPTO', 0)
-            
-            # 3. Lấy Sức mua (Tiền mặt khả dụng) tại từng ví
             cash_mom = repo.get_available_cash(user_id, 'CASH')
             bp_stock = repo.get_available_cash(user_id, 'STOCK')
             bp_crypto = repo.get_available_cash(user_id, 'CRYPTO')
             
-            # 4. Tổng hợp các chỉ số tài chính lõi
+            stock_cost = costs.get('STOCK', 0)
+            crypto_cost = costs.get('CRYPTO', 0)
             total_assets = cash_mom + bp_stock + bp_crypto + stock_cost + crypto_cost
             net_invested = t_in - t_out
-            pnl_total = total_assets - net_invested
-            roi = (pnl_total / net_invested * 100) if net_invested > 0 else 0
-            
+            pnl = total_assets - net_invested
+            roi = (pnl / net_invested * 100) if net_invested > 0 else 0
             total_bp = cash_mom + bp_stock + bp_crypto
             cash_pct = (total_bp / total_assets * 100) if total_assets > 0 else 0
 
-        # Layout "Bọc thép" chuẩn CEO yêu cầu
-        res = [
-            "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>",
-            "━━━━━━━━━━━━━━━━━━━",
-            f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>",
-            f"⬆️ Tổng nạp: {self.format_smart(t_in)}",
-            f"⬇️ Tổng rút: {self.format_smart(t_out)}",
-            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl_total)} ({roi:+.1f}%)</b>",
-            "",
-            "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>",
-            f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢",
-            f"• Ví Stock: {self.format_smart(stock_cost)} (💵 {self.format_smart(bp_stock)})",
-            f"• Ví Crypto: {self.format_smart(crypto_cost)} (💵 {self.format_smart(bp_crypto)})",
-            "",
-            "🛡️ <b>SỨC KHỎE DANH MỤC:</b>",
-            f"• Trạng thái: {'An toàn' if cash_pct > 30 else 'Cần chú ý'} (Tiền mặt: {cash_pct:.0f}%)",
-            f"• Sức mua tổng: <b>{self.format_smart(total_bp)}</b>",
+        return (
+            "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>\n"
+            f"⬆️ Tổng nạp: {self.format_smart(t_in)}\n"
+            f"⬇️ Tổng rút: {self.format_smart(t_out)}\n"
+            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl)} ({roi:+.1f}%)</b>\n\n"
+            "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>\n"
+            f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢\n"
+            f"• Ví Stock: {self.format_smart(stock_cost)} (💵 {self.format_smart(bp_stock)})\n"
+            f"• Ví Crypto: {self.format_smart(crypto_cost)} (💵 {self.format_smart(bp_crypto)})\n\n"
+            "🛡️ <b>SỨC KHỎE DANH MỤC:</b>\n"
+            f"• Trạng thái: {'An toàn' if cash_pct > 30 else 'Cần chú ý'} (Tiền mặt: {cash_pct:.0f}%)\n"
+            f"• Sức mua tổng: <b>{self.format_smart(total_bp)}</b>\n"
             "━━━━━━━━━━━━━━━━━━━"
-        ]
-        return "\n".join(res)
+        )
