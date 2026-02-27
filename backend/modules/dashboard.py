@@ -19,7 +19,6 @@ class DashboardModule(BaseModule):
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            
             cursor.execute("SELECT asset_type, SUM(total_qty * avg_price) FROM portfolio WHERE user_id=? GROUP BY asset_type", (user_id,))
             costs = {r[0]: r[1] for r in cursor.fetchall()}
             
@@ -39,7 +38,6 @@ class DashboardModule(BaseModule):
             "━━━━━━━━━━━━━━━━━━━\n"
             f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>\n"
             f"⬆️ Tổng nạp: {self.format_smart(t_in)}\n"
-            f"⬇️ Tổng rút: {self.format_smart(t_out)}\n"
             f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl)} ({roi:+.1f}%)</b>\n\n"
             "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>\n"
             f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢\n"
