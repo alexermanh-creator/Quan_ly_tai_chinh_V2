@@ -10,16 +10,33 @@ class CommandParser:
             parts = raw_text.split()
             if not parts: return None
 
-            # 1. LỆNH CÀI ĐẶT TỶ GIÁ (Ưu tiên số 1)
-            # Cú pháp: gia ex_rate 25500
+            # 1. LỆNH CÀI ĐẶT TỶ GIÁ (gia ex_rate 25500)
             if len(parts) == 3 and parts[0] == 'gia' and parts[1] == 'ex_rate':
                 return {
-                    'action': 'SET_SETTING',
-                    'key': 'EX_RATE',
+                    'action': 'SET_SETTING', 'key': 'EX_RATE',
                     'value': float(parts[2].replace(',', '.'))
                 }
 
-            # 2. LỆNH NẠP/RÚT TIỀN
+            # 2. LỆNH ĐIỀU CHUYỂN VỐN (Ví dụ: chuyen 500tr stock)
+            # Cấu trúc: chuyen [số lượng] [đơn vị] [ví đích]
+            transfer_match = re.match(r'^chuyen\s*([\d\.,]+)\s*(ty|tr|trieu|triệu)?\s*(stock|crypto|other)$', raw_text)
+            if transfer_match:
+                amount_str = transfer_match.group(1).replace(',', '.')
+                unit = transfer_match.group(2)
+                target_wallet = transfer_match.group(3).upper()
+                
+                amount = float(amount_str)
+                if unit == 'ty': amount *= 1_000_000_000
+                elif unit in ['tr', 'trieu', 'triệu']: amount *= 1_000_000
+                
+                return {
+                    'ticker': f'CAP_VON_{target_wallet}', 
+                    'action': 'TRANSFER',
+                    'qty': 1.0, 'price': amount, 'total_val': amount, 
+                    'asset_type': target_wallet
+                }
+
+            # 3. LỆNH NẠP/RÚT TIỀN (Vào Ví Mẹ - CASH)
             cash_match = re.match(r'^(nap|rut)\s*([\d\.,]+)\s*(ty|tr|trieu|triệu)?$', raw_text)
             if cash_match:
                 action_raw = cash_match.group(1)
@@ -34,4 +51,5 @@ class CommandParser:
                     'qty': 1.0, 'price': amount, 'total_val': amount, 'asset_type': 'CASH'
                 }
 
-            # ... logic xử lý S/C và giao dịch giữ nguyên ...
+            # ... (Các logic xử lý mua bán S/C giữ nguyên) ...
+            # Lưu ý: Khi mua, asset_type sẽ được Resolver xác định là STOCK hoặc CRYPTO
