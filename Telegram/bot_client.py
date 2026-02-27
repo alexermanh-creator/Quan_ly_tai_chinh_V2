@@ -14,7 +14,10 @@ class FinanceBot:
 
     def get_menu(self, menu_type="HOME"):
         if menu_type == "STOCK":
-            return ReplyKeyboardMarkup([[KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")], [KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ")]], resize_keyboard=True)
+            return ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá")],
+                [KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ")]
+            ], resize_keyboard=True)
         return ReplyKeyboardMarkup([
             [KeyboardButton("💼 Tài sản của bạn")],
             [KeyboardButton("📊 Chứng Khoán"), KeyboardButton("🪙 Crypto")],
@@ -25,10 +28,18 @@ class FinanceBot:
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, user_id = update.message.text, update.effective_user.id
+        # Xử lý nút bấm menu
         if text in ["💼 Tài sản của bạn", "🏠 Trang chủ"]:
             await update.message.reply_html(DashboardModule(user_id).run(), reply_markup=self.get_menu("HOME"))
         elif text == "📊 Chứng Khoán":
             await update.message.reply_html(StockModule(user_id).run(), reply_markup=self.get_menu("STOCK"))
+        elif text == "➕ Giao dịch":
+            await update.message.reply_html("📝 <b>Lệnh mẫu:</b> <code>HPG 1000 28.5</code>", reply_markup=self.get_menu("STOCK"))
+        elif text == "🔄 Cập nhật giá":
+            await update.message.reply_html("🔍 Đang đồng bộ giá thị trường...", reply_markup=self.get_menu("STOCK"))
+        elif text == "📈 Báo cáo nhóm":
+            await update.message.reply_html("📊 Đang phân tích tỉ trọng...", reply_markup=self.get_menu("STOCK"))
+        # Xử lý lệnh gõ tay
         else:
             p = CommandParser.parse_transaction(text)
             if p:
