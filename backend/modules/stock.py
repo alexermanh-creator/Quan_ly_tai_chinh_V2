@@ -6,8 +6,10 @@ from backend.database.repository import repo
 class StockModule(BaseModule):
     def format_smart(self, value):
         abs_v = abs(value)
-        if abs_v >= 1e9: return f"{value/1e9:.2f} tỷ"
-        return f"{value/1e6:,.1f}tr"
+        sign = "-" if value < 0 else ""
+        if abs_v >= 1e9: return f"{sign}{value/1e9:.2f} tỷ"
+        if abs_v >= 1e6: return f"{sign}{value/1e6:,.1f}tr"
+        return f"{sign}{value:,.0f}đ"
 
     def run(self):
         user_id = self.user_id
@@ -15,10 +17,12 @@ class StockModule(BaseModule):
         
         with db.get_connection() as conn:
             cursor = conn.cursor()
+            # Thống kê nạp/rút riêng của ví Stock
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
+            
             cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
@@ -45,6 +49,6 @@ class StockModule(BaseModule):
         else:
             for r in sorted_rows:
                 val = r['total_qty'] * r['avg_price']
-                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(val)}")
+                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n• GT: {self.format_smart(val)}")
         
         return "\n".join(res)
