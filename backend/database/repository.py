@@ -17,9 +17,8 @@ class Repository:
                 VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
             ''', (user_id, ticker, asset_type, qty, price, total_value, type))
 
-            # 2. CẬP NHẬT BẢNG PORTFOLIO (Logic mới để tối ưu Dashboard)
+            # 2. CẬP NHẬT BẢNG PORTFOLIO (Logic tối ưu Dashboard)
             if asset_type != 'CASH':
-                # Lấy dữ liệu hiện tại trong portfolio
                 cursor.execute("SELECT total_qty, avg_price FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, ticker))
                 row = cursor.fetchone()
                 
@@ -31,18 +30,15 @@ class Repository:
 
                 if type == 'BUY':
                     new_qty = current_qty + qty
-                    # Công thức tính giá vốn bình quân (Weighted Average Cost)
                     if new_qty > 0:
                         new_avg_price = ((current_qty * current_avg_price) + total_value) / new_qty
                 elif type == 'SELL':
                     new_qty = current_qty - qty
                 elif type == 'DIVIDEND_STOCK':
                     new_qty = current_qty + qty
-                    # Nhận cổ tức cổ phiếu làm giảm giá vốn
                     if new_qty > 0:
                         new_avg_price = (current_qty * current_avg_price) / new_qty
 
-                # Cập nhật hoặc Thêm mới vào Portfolio
                 cursor.execute('''
                     INSERT INTO portfolio (user_id, ticker, asset_type, total_qty, avg_price, last_updated)
                     VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
@@ -55,8 +51,19 @@ class Repository:
             conn.commit()
 
     @staticmethod
+    def set_setting(key, value, user_id):
+        """Hàm dùng để CEO tự nhập tỷ giá EX_RATE bằng tay"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO settings (key, value, user_id) 
+                VALUES (?, ?, ?) 
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            ''', (key, str(value), user_id))
+            conn.commit()
+
+    @staticmethod
     def get_available_cash(user_id):
-        """Giữ nguyên logic tính tiền mặt từ transactions"""
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -69,7 +76,6 @@ class Repository:
             result = cursor.fetchone()
             return result['balance'] if result and result['balance'] else 0
 
-    # ... Các hàm get_latest_transactions, delete_transaction giữ nguyên như bản cũ của bạn ...
     @staticmethod
     def get_latest_transactions(user_id, limit=10, offset=0, asset_type=None, search_query=None):
         with db.get_connection() as conn:
@@ -87,5 +93,19 @@ class Repository:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-# Khởi tạo instance duy nhất để dùng chung
+    @staticmethod
+    def get_all_transactions_for_report(user_id):
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM transactions WHERE user_id = ? ORDER BY date ASC", (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def get_current_prices():
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ticker, current_price FROM manual_prices")
+            return {row['ticker']: row['current_price'] for row in cursor.fetchall()}
+
+# Khởi tạo instance duy nhất
 repo = Repository()
