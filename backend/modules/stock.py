@@ -19,7 +19,6 @@ class StockModule(BaseModule):
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            
             cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
@@ -42,10 +41,10 @@ class StockModule(BaseModule):
         ]
 
         if not rows:
-            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào)</i>")
+            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào trong ví này)</i>")
         else:
             for r in sorted_rows:
                 val = r['total_qty'] * r['avg_price']
-                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n• GT: {self.format_smart(val)}")
+                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(val)}")
         
         return "\n".join(res)
