@@ -12,14 +12,12 @@ class StockModule(BaseModule):
     def run(self):
         user_id = self.user_id
         bp_stock = repo.get_available_cash(user_id, 'STOCK')
-        
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='STOCK' AND type='TRANSFER_OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            
             cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
@@ -28,24 +26,18 @@ class StockModule(BaseModule):
         sorted_rows = sorted(rows, key=lambda x: x['total_qty'] * x['avg_price'], reverse=True)
 
         res = [
-            "📊 <b>DANH MỤC CỔ PHIẾU</b>",
-            "━━━━━━━━━━━━━━━━━━━",
+            "📊 <b>DANH MỤC CỔ PHIẾU</b>\n━━━━━━━━━━━━━━━━━━━",
             f"💰 Tổng giá trị: <b>{self.format_smart(total_val)}</b>",
             f"💵 Vốn đầu tư: {self.format_smart(total_cost)}",
             f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
-            f"📈 Lãi/Lỗ: 0đ (+0.0%)",
-            "━━━━━━━━━━━━━━━━━━━",
+            f"📈 Lãi/Lỗ: 0đ (+0.0%)\n━━━━━━━━━━━━━━━━━━━",
             f"⬆️ Tổng nạp ví: {self.format_smart(t_in)}",
             f"⬇️ Tổng rút ví: {self.format_smart(t_out)}",
-            f"📊 Tỉ trọng lớn: {sorted_rows[0]['ticker'] if sorted_rows else '---'}",
-            "━━━━━━━━━━━━━━━━━━━"
+            f"📊 Tỉ trọng lớn: {sorted_rows[0]['ticker'] if sorted_rows else '---'}\n━━━━━━━━━━━━━━━━━━━"
         ]
-
         if not rows:
-            res.insert(-1, "\n<i>(Sếp chưa nắm giữ mã nào trong ví này)</i>")
+            res.append("<i>(Sếp chưa nắm giữ mã nào)</i>")
         else:
             for r in sorted_rows:
-                val = r['total_qty'] * r['avg_price']
-                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.1f}\n• GT: {self.format_smart(val)}")
-        
+                res.append(f"────────────\n💎 <b>{r['ticker']}</b>\n• SL: {r['total_qty']:,.0f} | Vốn TB: {r['avg_price']:,.0f}\n• GT: {self.format_smart(r['total_qty'] * r['avg_price'])}")
         return "\n".join(res)
