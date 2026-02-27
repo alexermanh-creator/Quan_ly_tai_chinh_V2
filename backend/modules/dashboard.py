@@ -15,25 +15,21 @@ class DashboardModule(BaseModule):
         user_id = self.user_id
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # 1. Nạp/Rút gốc tại Ví Mẹ
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
             
-            # 2. Giá trị tài sản đang nắm giữ (Giá vốn)
             cursor.execute("SELECT asset_type, SUM(total_qty * avg_price) FROM portfolio WHERE user_id=? GROUP BY asset_type", (user_id,))
             costs = {r[0]: r[1] for r in cursor.fetchall()}
             
             stock_val = costs.get('STOCK', 0)
             crypto_val = costs.get('CRYPTO', 0)
             
-            # 3. Tiền mặt (Sức mua) tại từng ví
             cash_mom = repo.get_available_cash(user_id, 'CASH')
             bp_stock = repo.get_available_cash(user_id, 'STOCK')
             bp_crypto = repo.get_available_cash(user_id, 'CRYPTO')
             
-            # 4. Tổng hợp chỉ số
             total_assets = cash_mom + bp_stock + bp_crypto + stock_val + crypto_val
             net_invested = t_in - t_out
             pnl_total = total_assets - net_invested
