@@ -21,14 +21,14 @@ class StockModule(BaseModule):
             cursor.execute("SELECT ticker, total_qty, avg_price FROM portfolio WHERE user_id=? AND asset_type='STOCK' AND total_qty > 0", (user_id,))
             rows = [dict(r) for r in cursor.fetchall()]
 
-        total_cost = sum(r['total_qty'] * r['avg_price'] for r in rows)
-        total_val = total_cost + bp_stock
+        total_inv = sum(r['total_qty'] * r['avg_price'] for r in rows)
+        total_val = total_inv + bp_stock
         sorted_rows = sorted(rows, key=lambda x: x['total_qty'] * x['avg_price'], reverse=True)
 
         res = [
             "📊 <b>DANH MỤC CỔ PHIẾU</b>\n━━━━━━━━━━━━━━━━━━━",
             f"💰 Tổng giá trị: <b>{self.format_smart(total_val)}</b>",
-            f"💵 Vốn đầu tư: {self.format_smart(total_cost)}",
+            f"💵 Vốn đầu tư: {self.format_smart(total_inv)}",
             f"💸 Sức mua: <b>{self.format_smart(bp_stock)}</b>",
             f"📈 Lãi/Lỗ: 0đ (+0.0%)\n━━━━━━━━━━━━━━━━━━━",
             f"⬆️ Tổng nạp ví: {self.format_smart(t_in)}",
