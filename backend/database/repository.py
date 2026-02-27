@@ -14,7 +14,7 @@ class Repository:
     def get_available_cash(user_id, asset_type):
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # Bọc thép: Chỉ tính tiền mặt TRONG PHẠM VI 1 VÍ duy nhất
+            # Bọc thép: Chỉ tính toán trong phạm vi asset_type được yêu cầu
             cursor.execute("""
                 SELECT SUM(CASE 
                     WHEN type IN ('IN', 'SELL', 'TRANSFER_IN', 'CASH_DIVIDEND') THEN total_value 
@@ -29,31 +29,39 @@ class Repository:
     def save_transaction(user_id, ticker, asset_type, qty, price, total_value, type):
         ticker, asset_type, type = ticker.upper(), asset_type.upper(), type.upper()
 
+        # LOGIC TRANSFER: Bọc thép nguyên tử
         if type == 'TRANSFER':
-            # Xác định Nguồn và Đích dựa trên ticker MOVE_
-            target = asset_type
-            source = "CASH" if target != "CASH" else ticker.replace("MOVE_", "")
+            target_wallet = asset_type # Ví đích (STOCK/CRYPTO/CASH)
+            # Nếu đích không phải CASH thì nguồn chắc chắn là CASH (Mẹ)
+            source_wallet = "CASH" if target_wallet != "CASH" else ticker.replace("MOVE_", "")
             
-            # Nếu rút về CASH, nguồn thường là STOCK (mặc định nếu không rõ)
-            if source == "CASH" and target == "CASH": source = "STOCK" 
-
-            if Repository.get_available_cash(user_id, source) < total_value:
-                return False, f"❌ Ví {source} không đủ tiền để chuyển!"
+            # Kiểm tra nguồn lực trước khi chuyển
+            available = Repository.get_available_cash(user_id, source_wallet)
+            if available < total_value:
+                return False, f"❌ Ví {source_wallet} chỉ còn {Repository.format_smart_currency(available)}. Thiếu {Repository.format_smart_currency(total_value - available)}!"
 
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", (user_id, f"TO_{target}", source, total_value, total_value))
-                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", (user_id, f"FROM_{source}", target, total_value, total_value))
+                # 1. Ghi nhận phiếu chi từ ví Nguồn
+                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_OUT', datetime('now', 'localtime'))", 
+                              (user_id, f"TO_{target_wallet}", source_wallet, total_value, total_value))
+                # 2. Ghi nhận phiếu thu vào ví Đích
+                cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, 1, ?, ?, 'TRANSFER_IN', datetime('now', 'localtime'))", 
+                              (user_id, f"FROM_{source_wallet}", target_wallet, total_value, total_value))
                 conn.commit()
-            return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)}."
+            return True, f"✅ Đã điều chuyển {Repository.format_smart_currency(total_value)} từ {source_wallet} sang {target_wallet}."
 
-        # Chặn mua khống
-        if type == 'BUY' and Repository.get_available_cash(user_id, asset_type) < total_value:
-            return False, f"❌ Ví {asset_type} không đủ sức mua! Sếp cần 'chuyen' tiền vào trước."
+        # LOGIC MUA HÀNG: Chặn mua khống triệt để
+        if type == 'BUY':
+            available = Repository.get_available_cash(user_id, asset_type)
+            if available < total_value:
+                return False, f"❌ Ví {asset_type} không đủ sức mua! (Còn {Repository.format_smart_currency(available)} - Cần {Repository.format_smart_currency(total_value)})"
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT INTO transactions (user_id, ticker, asset_type, qty, price, total_value, type, date) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))", (user_id, ticker, asset_type, qty, price, total_value, type))
+            
+            # Cập nhật Portfolio (Chỉ dành cho tài sản không phải CASH)
             if asset_type != 'CASH' and type in ['BUY', 'SELL']:
                 cursor.execute("SELECT total_qty, avg_price FROM portfolio WHERE user_id=? AND ticker=?", (user_id, ticker))
                 row = cursor.fetchone()
