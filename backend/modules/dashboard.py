@@ -4,57 +4,86 @@ from backend.database.db_manager import db
 from backend.database.repository import repo
 
 class DashboardModule(BaseModule):
-    def format_m(self, value):
-        """Format số tiền theo dạng .M (Triệu) đúng yêu cầu CEO"""
-        return f"{value / 1_000_000:,.1f}M"
+    def format_smart(self, value):
+        """Định dạng thông minh: Tỷ hoặc Triệu (.M) tùy độ lớn"""
+        abs_val = abs(value)
+        sign = "-" if value < 0 else ""
+        if abs_val >= 1_000_000_000:
+            return f"{sign}{abs_val / 1_000_000_000:.2f} tỷ"
+        return f"{sign}{abs_val / 1_000_000:,.1f}M"
 
     def run(self):
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Dữ liệu nạp/rút từ Ví Mẹ
+            # 1. Dữ liệu nạp/rút từ ngoại biên vào hệ thống (Ví Mẹ)
+            # Chỉ tính các lệnh nạp/rút thực tế, không tính chuyển nội bộ
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'IN'", (self.user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id = ? AND asset_type = 'CASH' AND type = 'OUT'", (self.user_id,))
             t_out = cursor.fetchone()[0] or 0
             
-            # 2. Giá trị các Ví Con
-            cursor.execute("SELECT asset_type, SUM(total_qty * avg_price) as cost FROM portfolio WHERE user_id = ? GROUP BY asset_type", (self.user_id,))
-            costs = {row['asset_type']: row['cost'] for row in cursor.fetchall()}
+            # 2. Giá trị tài sản đang nắm giữ trong các Ví Con (Giá trị thị trường)
+            # Lấy giá manual để tính mkt_value thay vì chỉ dùng giá vốn (cost)
+            cursor.execute("SELECT ticker, current_price FROM manual_prices")
+            price_map = {row['ticker']: row['current_price'] for row in cursor.fetchall()}
+
+            cursor.execute("SELECT ticker, asset_type, total_qty, avg_price FROM portfolio WHERE user_id = ?", (self.user_id,))
+            portfolio_rows = cursor.fetchall()
+
+            stock_mkt_val = 0
+            crypto_mkt_val = 0
+            other_mkt_val = 0
+
+            for r in portfolio_rows:
+                qty = r['total_qty']
+                if qty <= 0: continue
+                
+                ticker = r['ticker']
+                a_type = r['asset_type']
+                curr_p = price_map.get(ticker, r['avg_price'])
+                
+                # Hệ số nhân đặc thù
+                multiplier = 1000 if a_type == 'STOCK' else 1
+                val = qty * curr_p * multiplier
+
+                if a_type == 'STOCK': stock_mkt_val += val
+                elif a_type == 'CRYPTO': crypto_mkt_val += val
+                else: other_mkt_val += val
             
-            # 3. Tiền mặt (Ví Mẹ)
-            cash_mom = repo.get_available_cash(self.user_id)
+            # 3. Sức mua khả dụng (Tiền mặt thực tế tại từng Ví)
+            cash_mom = repo.get_available_cash(self.user_id, 'CASH')
+            buying_power_stock = repo.get_available_cash(self.user_id, 'STOCK')
+            buying_power_crypto = repo.get_available_cash(self.user_id, 'CRYPTO')
             
-            # Giả định giá trị thị trường hiện tại (lấy từ Portfolio để demo nhanh)
-            # Trong thực tế sẽ cộng thêm biến động giá từ manual_prices
-            stock_val = costs.get('STOCK', 0)
-            crypto_val = costs.get('CRYPTO', 0)
-            other_val = costs.get('OTHER', 0)
-            
-            total_assets = cash_mom + stock_val + crypto_val + other_val
+            # 4. Tính toán chỉ số tổng
+            total_assets = cash_mom + stock_mkt_val + crypto_mkt_val + other_mkt_val + buying_power_stock + buying_power_crypto
             net_invested = t_in - t_out
             pnl_total = total_assets - net_invested
             roi = (pnl_total / net_invested * 100) if net_invested > 0 else 0
-            cash_pct = (cash_mom / total_assets * 100) if total_assets > 0 else 0
+            
+            # Tỷ lệ tiền mặt tổng (bao gồm cả tiền mặt trong ví con)
+            total_cash = cash_mom + buying_power_stock + buying_power_crypto
+            cash_pct = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-        # Layout UX DASHBOARD TỔNG (Đúng yêu cầu CEO)
+        # Layout UX DASHBOARD TỔNG (Nâng cấp quản trị đa lớp)
         lines = [
             "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>",
             "━━━━━━━━━━━━━━━━━━━",
-            f"💰 Tổng tài sản: <b>{self.format_m(total_assets)}</b>",
-            f"⬆️ Tổng nạp: {self.format_m(t_in)}",
-            f"⬇️ Tổng rút: {self.format_m(t_out)}",
-            f"📈 Lãi/Lỗ tổng: <b>{'+' if pnl_total > 0 else ''}{self.format_m(pnl_total)} ({roi:+.1f}%)</b>",
+            f"💰 Tổng tài sản: <b>{self.format_smart(total_assets)}</b>",
+            f"⬆️ Tổng nạp: {self.format_smart(t_in)}",
+            f"⬇️ Tổng rút: {self.format_smart(t_out)}",
+            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(pnl_total)} ({roi:+.1f}%)</b>",
             "",
             "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>",
-            f"• Vốn Đầu tư (Mẹ): {self.format_m(cash_mom)} 🟢",
-            f"• Ví Stock: {self.format_m(stock_val)}",
-            f"• Ví Crypto: {self.format_m(crypto_val)}",
-            f"• Ví Khác: {self.format_m(other_val)}",
+            f"• Vốn Đầu tư (Mẹ): {self.format_smart(cash_mom)} 🟢",
+            f"• Ví Stock: {self.format_smart(stock_mkt_val)} (💵 {self.format_smart(buying_power_stock)})",
+            f"• Ví Crypto: {self.format_smart(crypto_mkt_val)} (💵 {self.format_smart(buying_power_crypto)})",
+            f"• Ví Khác: {self.format_smart(other_mkt_val)}",
             "",
             "🛡️ <b>SỨC KHỎE DANH MỤC:</b>",
             f"• Trạng thái: {'An toàn' if cash_pct > 30 else 'Cần chú ý'} (Tiền mặt: {cash_pct:.0f}%)",
-            "• Cảnh báo: Không có",
+            f"• Sức mua tổng: {self.format_smart(total_cash)}",
             "━━━━━━━━━━━━━━━━━━━"
         ]
         return "\n".join(lines)
