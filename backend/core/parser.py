@@ -1,6 +1,16 @@
 # backend/core/parser.py
 import re
-from backend.core.registry import AssetResolver, ASSET_REGISTRY
+# Đảm bảo bạn đã có file registry.py để import
+try:
+    from backend.core.registry import AssetResolver, ASSET_REGISTRY
+except ImportError:
+    # Fallback nếu registry chưa sẵn sàng (để debug giai đoạn 1)
+    class AssetResolver:
+        @staticmethod
+        def resolve(text): 
+            parts = text.split()
+            return ('STOCK' if parts[0] == 's' else 'CRYPTO', parts[1].upper())
+    ASSET_REGISTRY = {'STOCK': {'multiplier': 1000}, 'CRYPTO': {'multiplier': 1, 'default_rate': 25000}}
 
 class CommandParser:
     @staticmethod
@@ -8,7 +18,7 @@ class CommandParser:
         try:
             raw_text = text.lower().strip()
             
-            # --- 1. XỬ LÝ LỆNH NẠP/RÚT TIỀN (CASH) ---
+            # 1. XỬ LÝ LỆNH NẠP/RÚT TIỀN (Giữ nguyên logic của CEO)
             cash_match = re.match(r'^(nap|rut)\s*([\d\.,]+)\s*(ty|tr|trieu|triệu)?$', raw_text)
             if cash_match:
                 action_raw = cash_match.group(1)
@@ -23,46 +33,39 @@ class CommandParser:
                     'qty': 1.0, 'price': amount, 'total_val': amount, 'asset_type': 'CASH'
                 }
 
-            # --- 2. XỬ LÝ GIAO DỊCH TÀI SẢN (DÙNG REGISTRY ĐỘNG) ---
+            # 2. XỬ LÝ GIAO DỊCH TÀI SẢN
             parts = raw_text.split()
             if len(parts) < 2: return None
             
-            # Sử dụng AssetResolver thông minh từ Registry của CEO
             if parts[0] in ['s', 'c']:
                 input_resolver = f"{parts[0]} {parts[1]}"
                 val_1 = parts[2]
                 val_2 = parts[3] if len(parts) > 3 else None
             else:
-                # Giữ nguyên logic mặc định cho Ticker 3 chữ cái là Stock
                 input_resolver = f"s {parts[0]}" if len(parts[0]) == 3 and parts[0].isalpha() else parts[0]
                 val_1 = parts[1]
                 val_2 = parts[2] if len(parts) > 2 else None
 
             asset_type, ticker = AssetResolver.resolve(input_resolver)
 
-            # Phân loại lệnh đặc biệt (Cổ tức) - Chỉ áp dụng cho STOCK
+            # Xử lý Cổ tức
             if asset_type == 'STOCK':
                 if val_2 == 'cash':
                     return {'ticker': ticker, 'action': 'CASH_DIVIDEND', 'qty': 0, 'price': 0, 'total_val': abs(float(val_1)), 'asset_type': asset_type}
                 if val_2 == 'div':
                     return {'ticker': ticker, 'action': 'DIVIDEND_STOCK', 'qty': abs(float(val_1)), 'price': 0, 'total_val': 0, 'asset_type': asset_type}
 
-            # Xử lý Mua/Bán thông thường
-            qty = float(val_1)
-            price = float(val_2) if val_2 else 0
+            # Mua/Bán thông thường
+            qty = float(val_1.replace(',', '.'))
+            price = float(val_2.replace(',', '.')) if val_2 else 0
             
-            # Lấy Multiplier từ Registry (Tự động thích ứng với STOCK/CRYPTO/...)
             config = ASSET_REGISTRY.get(asset_type, {'multiplier': 1})
             multiplier = config.get('multiplier', 1)
-            
-            # Đặc thù Crypto: Nếu mua bằng USD, cần nhân thêm tỷ giá để lưu VNĐ vào Database (Theo logic Dashboard V1)
-            # Nếu CEO muốn lưu DB bằng VNĐ để Dashboard tính toán nhanh:
-            current_rate = config.get('default_rate', 1)
             total_val = abs(qty) * price * multiplier
             
-            # Nếu là Crypto, quy đổi total_val sang VNĐ ngay tại bước Parser để đồng bộ Database
+            # Quy đổi VNĐ cho Crypto
             if asset_type == 'CRYPTO':
-                total_val *= current_rate
+                total_val *= config.get('default_rate', 25000)
 
             return {
                 'ticker': ticker, 
