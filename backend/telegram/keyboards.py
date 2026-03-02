@@ -16,10 +16,13 @@ def get_home_keyboard():
     return markup
 
 def get_stock_keyboard():
-    """Bàn phím (Menu STOCK)"""
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    # Hàng 1
-    markup.row(KeyboardButton("➕ Giao dịch"), KeyboardButton("🔄 Cập nhật giá"))
-    # Hàng 2
-    markup.row(KeyboardButton("📈 Báo cáo nhóm"), KeyboardButton("🏠 Trang chủ"))
+    # Đúng Menu Sếp yêu cầu: 2 hàng, mỗi hàng 2 nút
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    btn_trade = types.KeyboardButton("➕ Giao dịch")
+    btn_refresh = types.KeyboardButton("🔄 Cập nhật giá")
+    btn_report = types.KeyboardButton("📈 Báo cáo nhóm")
+    btn_home = types.KeyboardButton("🏠 Trang chủ")
+    
+    markup.row(btn_trade, btn_refresh)
+    markup.row(btn_report, btn_home)
     return markup
