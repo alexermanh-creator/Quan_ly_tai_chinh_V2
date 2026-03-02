@@ -10,41 +10,55 @@ class DashboardModule:
         data = self.db.get_dashboard_data()
         wallets = {w['id']: w for w in data['wallets']}
         
-        # 1. Tiền mặt tại Ví Mẹ
+        # 1. Thông số từ Ví Mẹ
         cash_mother = wallets['CASH']['balance']
-        
-        # 2. Vốn thực tế đang nằm tại các ví con (Cấp đi - Thu về)
-        # Đây chính là con số "Vốn ròng" mà Sếp cấp cho mặt trận đó
-        capital_stock = wallets['STOCK']['total_in'] - wallets['STOCK']['total_out']
-        capital_crypto = wallets['CRYPTO']['total_in'] - wallets['CRYPTO']['total_out']
-        
-        # CHỐT LOGIC: Tổng tài sản = Tiền túi Mẹ + Vốn đã rót đi
-        total_asset = cash_mother + capital_stock + capital_crypto
-        
-        # Tổng nạp từ ngoài vào hệ thống
         total_nap_goc = wallets['CASH']['total_in']
         total_rut_goc = wallets['CASH']['total_out']
-        investment_goc = total_nap_goc - total_rut_goc
-        
-        # Lãi/Lỗ tổng ở trang chủ: Chỉ hiện số tiền ĐÃ THU HỒI về Ví Mẹ so với gốc nạp
-        pl_total = total_asset - investment_goc
-        pl_percent = (pl_total / investment_goc * 100) if investment_goc > 0 else 0
+        investment_net = total_nap_goc - total_rut_goc
+
+        # 2. Tính toán cho các Ví Con
+        summary_con = []
+        real_nav_system = cash_mother # Để tính % lãi lỗ thực tế toàn hệ thống
+        display_asset_home = cash_mother # Để hiển thị Tổng tài sản "An toàn" theo ý Sếp
+
+        for v_id in ['STOCK', 'CRYPTO']:
+            w = wallets[v_id]
+            # Vốn ròng đã cấp cho ví này (Cấp đi - Thu về)
+            capital_allocated = w['total_in'] - w['total_out']
+            
+            # Giá trị thực tế hiện tại (Tiền mặt + Cổ/Crypto)
+            h_val = sum(h['quantity'] * h['average_price'] for h in data['holdings'] if h['wallet_id'] == v_id)
+            current_nav_con = w['balance'] + h_val
+            
+            # CÔNG THỨC "AN TOÀN": Home chỉ hiện số Vốn đã cấp (Book Value)
+            # Nếu ví con đang lãi, chỉ hiện số Vốn. Nếu ví con lỗ, hiện số NAV thực (để cảnh báo rủi ro).
+            display_val = min(current_nav_con, capital_allocated)
+            display_asset_home += display_val
+            
+            # Cộng dồn để tính % lãi lỗ thực tế (Gồm cả lãi treo)
+            real_nav_system += current_nav_con
+            summary_con.append(f"• Ví {v_id.capitalize()}: {format_currency(capital_allocated)}")
+
+        # 3. Tính Lãi/Lỗ tổng (Hiển thị hiệu suất thực tế nhưng không cộng vào Asset)
+        pl_real_amt = real_nav_system - investment_net if investment_net > 0 else 0
+        pl_real_pct = (pl_real_amt / investment_net * 100) if investment_net > 0 else 0
 
         lines = [
             "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0",
             draw_line("thick"),
-            f"💰 Tổng tài sản: {format_currency(total_asset)}",
+            f"💰 Tổng tài sản: {format_currency(display_asset_home)}",
             f"⬆️ Tổng nạp: {format_currency(total_nap_goc)}",
             f"⬇️ Tổng rút: {format_currency(total_rut_goc)}",
-            f"📈 Lãi/Lỗ tổng: {format_currency(pl_total)} ({format_percent(pl_percent)})",
+            f"📈 Lãi/Lỗ tổng: {format_currency(pl_real_amt)} ({format_percent(pl_real_pct)})",
             "",
-            "📦 PHÂN BỔ NGUỒN VỐN (BOOK VALUE):",
-            f"• Vốn Đầu tư (Mẹ): {format_currency(cash_mother)} 🟢",
-            f"• Ví Stock: {format_currency(capital_stock)}",
-            f"• Ví Crypto: {format_currency(capital_crypto)}",
+            "📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):",
+            f"• Vốn Đầu tư (Mẹ): {format_currency(cash_mother)} 🟢"
+        ]
+        lines.extend(summary_con)
+        lines.extend([
             "",
             "🛡️ SỨC KHỎE DANH MỤC:",
-            f"• Trạng thái: An toàn",
+            f"• Trạng thái: {'Ổn định' if pl_real_pct >= 0 else 'Cảnh báo'}",
             draw_line("thick")
-        ]
+        ])
         return "\n".join(lines)
