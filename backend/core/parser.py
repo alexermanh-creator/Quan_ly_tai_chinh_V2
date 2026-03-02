@@ -1,32 +1,27 @@
+# backend/core/parser.py
 import re
 
+def parse_currency(text):
+    text = text.lower().replace(',', '').strip()
+    # Quy đổi đơn vị
+    multiplier = 1
+    if 'ty' in text: multiplier = 1_000_000_000
+    elif 'trieu' in text or 'tr' in text: multiplier = 1_000_000
+    
+    # Trích xuất số
+    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", text)
+    if not numbers: return 0
+    return float(numbers[0]) * multiplier
+
 def parse_trade_command(text):
-    """
-    Bóc tách lệnh mua bán cổ phiếu/crypto.
-    Hỗ trợ: s HAH 400 80 (Mua) hoặc s HAH -400 80 (Bán)
-    Trả về: (loại_ví, mã, số_lượng, giá) hoặc None nếu sai cú pháp
-    """
     text = text.strip().lower()
-    
-    # Regex bắt cú pháp: chữ s/c + khoảng trắng + chữ/số (mã) + khoảng trắng + số (âm/dương) + khoảng trắng + số
-    pattern = r'^(s|c)\s+([a-zA-Z0-9]+)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$'
+    pattern = r'^(s|c|k)\s+([a-zA-Z0-9]+)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$'
     match = re.match(pattern, text)
+    if not match: return None
     
-    if not match:
-        return None
-        
-    wallet_type = 'STOCK' if match.group(1) == 's' else 'CRYPTO'
+    w_map = {'s': 'STOCK', 'c': 'CRYPTO', 'k': 'OTHER'}
+    wallet_type = w_map[match.group(1)]
     symbol = match.group(2).upper()
     quantity = float(match.group(3))
     price = float(match.group(4))
-    
     return wallet_type, symbol, quantity, price
-
-def parse_fund_command(text):
-    """
-    Bóc tách lệnh nạp/rút tiền mẹ, hoặc chuyển tiền ví con.
-    Ví dụ: nap 10 ty, rut 500 trieu, chuyen stock 1 ty
-    """
-    # Xử lý quy đổi chữ thành số (ty -> * 1_000_000_000, trieu -> * 1_000_000)
-    # Phần này sẽ được nâng cấp logic chi tiết ở các module xử lý sau
-    return text.strip().lower().split()
