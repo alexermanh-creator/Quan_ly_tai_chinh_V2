@@ -57,7 +57,7 @@ class DatabaseRepo:
         symbol = symbol.upper()
         wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
         holding = self.execute_query("SELECT quantity, average_price FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
-        if quantity > 0:
+        if quantity > 0: # MUA
             if not wallet or wallet['balance'] < total_value: raise ValueError("Ví không đủ tiền!")
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
             if holding:
@@ -66,7 +66,7 @@ class DatabaseRepo:
                 self.execute_query("UPDATE holdings SET quantity = ?, average_price = ?, current_price = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, new_avg, price, wallet_id, symbol))
             else: self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price) VALUES (?, ?, ?, ?, ?)", (wallet_id, symbol, quantity, price, price))
             self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, 'MUA', ?, ?, ?, ?, 0)", (wallet_id, symbol, quantity, price, -total_value))
-        else:
+        else: # BÁN
             abs_qty = abs(quantity)
             if not holding or holding['quantity'] < abs_qty: raise ValueError("Không đủ hàng!")
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
