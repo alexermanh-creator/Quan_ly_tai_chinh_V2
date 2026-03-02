@@ -1,73 +1,73 @@
 # backend/modules/dashboard.py
-from backend.database.db_manager import db
-from backend.database.repository import repo
+from backend.database.repository import DatabaseRepo
+from backend.utils.formatter import format_currency, format_percent, draw_line
 
 class DashboardModule:
-    def __init__(self, user_id):
-        self.user_id = user_id
+    def __init__(self):
+        self.db = DatabaseRepo()
 
-    def format_smart(self, value):
-        abs_v = abs(value)
-        sign = "-" if value < 0 else "+" if value > 0 else ""
-        if abs_v >= 1e9: return f"{sign}{value/1e9:.2f} tỷ"
-        if abs_v >= 1e6: return f"{sign}{value/1e6:,.1f} tr"
-        return f"{value:,.0f} đ"
+    def get_main_dashboard(self):
+        data = self.db.get_dashboard_data()
+        wallets = {w['id']: w for w in data['wallets']}
+        
+        # CHỐT: Tổng nạp/rút chỉ lấy từ Ví Mẹ (Gốc)
+        total_nap = wallets['CASH']['total_in']
+        total_rut = wallets['CASH']['total_out']
+        
+        # Tổng tài sản = Tiền mặt tất cả các ví + Giá trị hiện giá của holdings
+        cash_all_wallets = sum(w['balance'] for w in wallets.values())
+        current_holding_value = sum(h['quantity'] * h['average_price'] for h in data['holdings'])
+        total_asset = cash_all_wallets + current_holding_value
 
-    def run(self):
-        user_id = self.user_id
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 1. Tính VỐN GỐC (Chỉ tính lệnh NAP/RUT tại Ví Mẹ)
-            cursor.execute("""
-                SELECT SUM(CASE WHEN type='IN' THEN total_value WHEN type='OUT' THEN -total_value ELSE 0 END)
-                FROM transactions WHERE user_id=? AND asset_type='CASH'
-            """, (user_id,))
-            net_invest = cursor.fetchone()[0] or 0
-            
-            # 2. Tính TỔNG NẠP (Để hiển thị dòng 2)
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='IN'", (user_id,))
-            total_in = cursor.fetchone()[0] or 0
-            
-            # 3. Tính TỔNG RÚT (Để hiển thị dòng 3)
-            cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
-            total_out = cursor.fetchone()[0] or 0
+        # Lãi/Lỗ tổng = Tổng tài sản hiện tại - (Vốn ròng còn lại trong hệ thống)
+        # Vốn ròng = Tổng nạp - Tổng rút
+        net_investment = total_nap - total_rut
+        pl_total = total_asset - net_investment if net_investment != 0 else total_asset
+        pl_percent = (pl_total / net_investment * 100) if net_investment > 0 else 0
 
-            # 4. Tính GIÁ TRỊ TÀI SẢN TRONG CÁC MÃ (Stock/Crypto)
-            cursor.execute("""
-                SELECT SUM(total_qty * (CASE WHEN asset_type='STOCK' THEN COALESCE(market_price, avg_price)*1000 
-                                             WHEN asset_type='CRYPTO' THEN COALESCE(market_price, avg_price)*25000 
-                                             ELSE 0 END))
-                FROM portfolio WHERE user_id=?
-            """, (user_id,))
-            asset_value = cursor.fetchone()[0] or 0
-            
-            # 5. Lấy tiền mặt thực tế tại từng ví
-            c_mom = repo.get_available_cash(user_id, 'CASH')
-            c_stock = repo.get_available_cash(user_id, 'STOCK')
-            c_crypto = repo.get_available_cash(user_id, 'CRYPTO')
-            
-            # 6. TỔNG TÀI SẢN THỰC TẾ
-            total_assets = c_mom + c_stock + c_crypto + asset_value
-            
-            # 7. LÃI/LỖ TỔNG (Đúng yêu cầu sếp: Lãi từ danh mục)
-            total_pnl = total_assets - net_invest
-            roi = (total_pnl / net_invest * 100) if net_invest > 0 else 0
+        lines = [
+            "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0",
+            draw_line("thick"),
+            f"💰 Tổng tài sản: {format_currency(total_asset)}",
+            f"⬆️ Tổng nạp: {format_currency(total_nap)}",
+            f"⬇️ Tổng rút: {format_currency(total_rut)}",
+            f"📈 Lãi/Lỗ tổng: {format_currency(pl_total)} ({format_percent(pl_percent)})",
+            "",
+            "📦 PHÂN BỔ NGUỒN VỐN:",
+            f"• Vốn Đầu tư (Mẹ): {format_currency(wallets['CASH']['balance'])} 🟢",
+            f"• Ví Stock: {format_currency(wallets['STOCK']['balance'])}",
+            f"• Ví Crypto: {format_currency(wallets['CRYPTO']['balance'])}",
+            "",
+            "🛡️ SỨC KHỎE DANH MỤC:",
+            f"• Tiền mặt: {format_percent(cash_all_wallets/total_asset*100 if total_asset > 0 else 0)}",
+            "• Trạng thái: An toàn",
+            draw_line("thick")
+        ]
+        return "\n".join(lines)
 
-        return (
-            "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Tổng tài sản: <b>{self.format_smart(total_assets).replace('+','')}</b>\n"
-            f"⬆️ Tổng nạp: {self.format_smart(total_in).replace('+','')}\n"
-            f"⬇️ Tổng rút: {self.format_smart(total_out).replace('+','')}\n"
-            f"📈 Lãi/Lỗ tổng: <b>{self.format_smart(total_pnl)} ({roi:+.2f}%)</b>\n\n"
-            "📦 <b>PHÂN BỔ NGUỒN VỐN:</b>\n"
-            f"• Vốn Đầu tư (Mẹ): {self.format_smart(c_mom).replace('+','')} 🟢\n"
-            f"• Ví Stock: {self.format_smart(c_stock).replace('+','')}\n"
-            f"• Ví Crypto: {self.format_smart(c_crypto).replace('+','')}\n"
-            "• Ví Khác: 0 đ\n\n"
-            "🛡️ <b>SỨC KHỎE DANH MỤC:</b>\n"
-            f"• Trạng thái: An toàn (Tiền mặt: {( (c_mom+c_stock+c_crypto)/total_assets*100 if total_assets>0 else 100):.0f}%)\n"
-            "• Cảnh báo: Không có\n"
-            "━━━━━━━━━━━━━━━━━━━"
-        )
+    def get_stock_dashboard(self):
+        data = self.db.get_dashboard_data()
+        stock_wallet = next((w for w in data['wallets'] if w['id'] == 'STOCK'), None)
+        holdings = [h for h in data['holdings'] if h['wallet_id'] == 'STOCK']
+        
+        # Giá trị hiện tại của danh mục Stock
+        current_val = sum(h['quantity'] * h['average_price'] for h in holdings)
+        # Giả định tạm thời: Lãi lỗ đang treo = 0 (vì chưa có module cập nhật giá realtime)
+        # Sau này: floating_pl = (Giá HT - Giá Vốn) * Số lượng
+        
+        lines = [
+            "📊 DANH MỤC CỔ PHIẾU",
+            draw_line("thick"),
+            f"💰 Tổng giá trị: {format_currency(current_val)}",
+            f"💸 Sức mua: {format_currency(stock_wallet['balance'] if stock_wallet else 0)}",
+            draw_line("thin")
+        ]
+
+        for h in holdings:
+            val = h['quantity'] * h['average_price']
+            lines.append(f"💎 {h['symbol']}")
+            lines.append(f"• SL: {h['quantity']:,} | Giá vốn: {h['average_price']/1000:,.1f}k")
+            lines.append(f"• Thành tiền: {format_currency(val)}")
+            lines.append(draw_line("thin"))
+            
+        return "\n".join(lines)
