@@ -34,6 +34,7 @@ class DatabaseRepo:
             return cursor.lastrowid
 
     def update_cash_balance(self, amount, tx_type):
+        """Nạp/Rút tiền GỐC từ ngoài vào hệ thống qua Ví Mẹ"""
         if amount > 0:
             self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
         else:
@@ -41,12 +42,34 @@ class DatabaseRepo:
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
+        """Luân chuyển tiền nội bộ. Phân biệt Rút Lãi và Rút Vốn"""
+        # Trừ số dư thực tế
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (amount, to_wallet))
-        if from_wallet != 'CASH':
-            self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (amount, from_wallet))
-        if to_wallet != 'CASH':
+        
+        # LOGIC BẢO TOÀN VỐN: 
+        # Nếu chuyển từ Mẹ sang Con -> Luôn là cấp Vốn
+        if from_wallet == 'CASH':
             self.execute_query("UPDATE wallets SET total_in = total_in + ? WHERE id = ?", (amount, to_wallet))
+        
+        # Nếu chuyển từ Con về Mẹ -> Kiểm tra xem là Rút Lãi hay Rút Vốn
+        elif to_wallet == 'CASH':
+            # Tính tổng lãi đã chốt của ví con này
+            pl_data = self.execute_query("SELECT SUM(realized_pl) as total_pl FROM transactions WHERE wallet_id = ?", (from_wallet,), fetch_one=True)
+            total_realized = pl_data['total_pl'] or 0
+            
+            # Tính số tiền đã rút về Mẹ trước đó (total_out hiện tại)
+            current_out = self.execute_query("SELECT total_out FROM wallets WHERE id = ?", (from_wallet,), fetch_one=True)['total_out']
+            
+            # Lãi còn lại có thể rút mà không phạm vào vốn gốc
+            available_profit = max(0, total_realized - current_out)
+            
+            # Nếu số tiền rút > lãi đang có -> Phần vượt quá mới bị trừ vào Vốn gốc (total_out tăng)
+            if amount > available_profit:
+                capital_reduction = amount - available_profit
+                self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (capital_reduction, from_wallet))
+            # Nếu rút trong phạm vi lãi -> Vốn gốc (total_out) giữ nguyên
+
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_OUT', ?)", (from_wallet, -amount))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
@@ -54,18 +77,12 @@ class DatabaseRepo:
         symbol = symbol.upper()
         is_buy = quantity > 0
         abs_qty = abs(quantity)
-        
-        # 1. Lấy thông tin ví và cổ phiếu
         wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
         holding = self.execute_query("SELECT quantity, average_price FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
         
-        realized_pl = 0
-
         if is_buy:
-            # --- CHẶN MUA KHI HẾT TIỀN ---
             if not wallet or wallet['balance'] < total_value:
                 raise ValueError(f"Ví {wallet_id} không đủ tiền! Sức mua hiện tại chỉ có {wallet['balance']:,.0f} đ.")
-            
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
             if holding:
                 new_qty = holding['quantity'] + abs_qty
@@ -73,18 +90,15 @@ class DatabaseRepo:
                 self.execute_query("UPDATE holdings SET quantity = ?, average_price = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, new_avg, wallet_id, symbol))
             else:
                 self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price) VALUES (?, ?, ?, ?)", (wallet_id, symbol, abs_qty, price))
-            tx_type, amount_log = 'MUA', -total_value
+            tx_type, amount_log, realized_pl = 'MUA', -total_value, 0
         else:
-            if not holding or holding['quantity'] < abs_qty:
-                raise ValueError(f"Không đủ {symbol} trong danh mục để bán!")
+            if not holding or holding['quantity'] < abs_qty: raise ValueError(f"Không đủ {symbol} để bán!")
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
             cost_basis = abs_qty * holding['average_price']
             realized_pl = total_value - cost_basis
             new_qty = holding['quantity'] - abs_qty
-            if new_qty <= 0:
-                self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
-            else:
-                self.execute_query("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
+            if new_qty <= 0: self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
+            else: self.execute_query("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
             tx_type, amount_log = 'BAN', total_value
 
         self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -94,6 +108,4 @@ class DatabaseRepo:
     def get_dashboard_data(self):
         wallets = self.execute_query("SELECT * FROM wallets", fetch_all=True)
         holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
-        # Tính tổng lãi đã chốt riêng cho từng ví
-        pl_by_wallet = self.execute_query("SELECT wallet_id, SUM(realized_pl) as realized FROM transactions GROUP BY wallet_id", fetch_all=True)
-        return {"wallets": wallets, "holdings": holdings, "realized_map": {item['wallet_id']: item['realized'] for item in pl_by_wallet}}
+        return {"wallets": wallets, "holdings": holdings}
