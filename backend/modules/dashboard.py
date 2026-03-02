@@ -15,22 +15,33 @@ class DashboardModule(BaseModule):
         user_id = self.user_id
         with db.get_connection() as conn:
             cursor = conn.cursor()
+            # Vốn gốc chảy vào hệ thống (Chỉ tính tại ví Mẹ)
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='IN'", (user_id,))
             t_in = cursor.fetchone()[0] or 0
             cursor.execute("SELECT SUM(total_value) FROM transactions WHERE user_id=? AND asset_type='CASH' AND type='OUT'", (user_id,))
             t_out = cursor.fetchone()[0] or 0
-            cursor.execute("SELECT SUM(total_qty * avg_price) FROM portfolio WHERE user_id=?", (user_id,))
+            
+            # GIÁ TRỊ TÀI SẢN HIỆN TẠI (Đã bóc tách multiplier chuẩn)
+            cursor.execute("""
+                SELECT SUM(total_qty * (CASE WHEN asset_type='STOCK' THEN COALESCE(market_price, avg_price)*1000 
+                                             WHEN asset_type='CRYPTO' THEN COALESCE(market_price, avg_price)*25000 
+                                             ELSE COALESCE(market_price, avg_price) END)) 
+                FROM portfolio WHERE user_id=?
+            """, (user_id,))
             inv_val = cursor.fetchone()[0] or 0
             
+            # Tiền mặt tại các túi
             c_mom = repo.get_available_cash(user_id, 'CASH')
             c_stock = repo.get_available_cash(user_id, 'STOCK')
             c_crypto = repo.get_available_cash(user_id, 'CRYPTO')
             
+            # TỔNG TÀI SẢN THỰC TẾ = Tiền mặt các ví + Giá trị thị trường danh mục
             total_assets = c_mom + c_stock + c_crypto + inv_val
             net_inv = t_in - t_out
             pnl = total_assets - net_inv
             roi = (pnl / net_inv * 100) if net_inv > 0 else 0
 
+        # Trả về Layout chuẩn sếp duyệt (giữ nguyên gạch ngang)
         return (
             "🏦 <b>HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
