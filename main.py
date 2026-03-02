@@ -7,6 +7,8 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from backend.telegram.bot_client import bot
 from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard
 from backend.database.repository import DatabaseRepo
+from backend.modules.dashboard import DashboardModule
+dash = DashboardModule()
 
 # Khởi tạo kết nối DB
 db = DatabaseRepo()
@@ -24,8 +26,9 @@ def send_welcome(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
 def handle_stock_menu(message):
-    """Khi bấm vào Chứng Khoán -> Chuyển sang bàn phím STOCK"""
-    bot.send_message(message.chat.id, "Đã chuyển sang không gian làm việc Chứng Khoán 📈", reply_markup=get_stock_keyboard())
+    """Khi bấm vào Chứng Khoán -> Hiện danh mục STOCK + Đổi bàn phím"""
+    text = dash.get_stock_dashboard()
+    bot.send_message(message.chat.id, text, reply_markup=get_stock_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "🏠 Trang chủ")
 def handle_home_menu(message):
@@ -34,8 +37,9 @@ def handle_home_menu(message):
 
 @bot.message_handler(func=lambda message: message.text == "💼 Tài sản của bạn")
 def show_dashboard(message):
-    """Hiển thị Dashboard Tổng quan (Đang chờ gắn module UI)"""
-    bot.send_message(message.chat.id, "⏳ Đang trích xuất dữ liệu Dashboard Tổng... (Tích hợp ở module sau)", reply_markup=get_home_keyboard())
+    """Hiển thị Dashboard Tổng quan"""
+    text = dash.get_main_dashboard()
+    bot.send_message(message.chat.id, text, reply_markup=get_home_keyboard())
 
 # --- XỬ LÝ LỆNH GÕ TAY (PARSER) ---
 
@@ -78,3 +82,4 @@ def handle_trading_commands(message):
 if __name__ == "__main__":
     print("🚀 Hệ điều hành Tài chính V2.0 đang chạy...")
     bot.infinity_polling()
+
