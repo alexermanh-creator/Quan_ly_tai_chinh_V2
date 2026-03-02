@@ -17,7 +17,7 @@ class StockModule:
             von_rong = w['total_in'] - w['total_out']
             pl_tong = data['realized'].get('STOCK', 0) + (gt_thi_truong - sum(h['quantity'] * h['average_price'] for h in holdings))
 
-            # --- LOGIC MÃ TỐT/KÉM & TỈ TRỌNG ---
+            best_info, worst_info, max_sym, max_pct = "--", "--", "--", 0
             perf_list = []
             perf_map = {p['symbol']: {'pl': p['realized'], 'inv': p['total_invested']} for p in data['perf_symbols']}
             for h in holdings:
@@ -25,16 +25,14 @@ class StockModule:
                 if h['symbol'] in perf_map: perf_map[h['symbol']]['pl'] += f_pl
                 else: perf_map[h['symbol']] = {'pl': f_pl, 'inv': h['quantity'] * h['average_price']}
 
-            best_info, worst_info, max_sym, max_pct = "--", "--", "--", 0
             if perf_map:
                 for s, v in perf_map.items():
                     roi = (v['pl']/v['inv']*100 if v['inv']>0 else 0)
                     perf_list.append({'sym': s, 'roi': roi, 'amt': v['pl']})
                 best = max(perf_list, key=lambda x: x['roi'])
-                best_info = f"{best['sym']} ({format_percent(best['roi'])}) (+{format_currency(best['amt'])})"
+                best_info = f"{best['sym']} ({format_percent(best['roi'])}) ({'+' if best['amt']>0 else ''}{format_currency(best['amt'])})"
                 worst = min(perf_list, key=lambda x: x['roi'])
                 worst_info = f"{worst['sym']} ({format_percent(worst['roi'])})"
-                
                 if holdings:
                     max_h = max(holdings, key=lambda x: x['quantity'] * (x['current_price'] or x['average_price']))
                     max_pct = (max_h['quantity'] * (max_h['current_price'] or max_h['average_price']) / nav * 100) if nav > 0 else 0
@@ -53,18 +51,12 @@ class StockModule:
                 f"📊 Tỉ trọng lớn nhất: {max_sym} ({max_pct:.1f}%)",
                 draw_line("thin")
             ]
-
             for h in holdings:
                 p_now = h['current_price'] or h['average_price']
                 roi = ((p_now / h['average_price']) - 1) * 100
-                lines += [
-                    f"💎 {h['symbol']}",
-                    f"• SL: {h['quantity']:,.0f} | Vốn TB: {h['average_price']/1000:,.1f}",
-                    f"• Hiện tại: {p_now/1000:,.1f} | GT: {format_currency(h['quantity']*p_now)}",
-                    f"• Lãi: {format_currency(h['quantity']*(p_now-h['average_price']))} ({format_percent(roi)})",
-                    draw_line("thin")
-                ]
-            
+                lines += [f"💎 {h['symbol']}", f"• SL: {h['quantity']:,.0f} | Vốn TB: {h['average_price']/1000:,.1f}", 
+                          f"• Hiện tại: {p_now/1000:,.1f} | GT: {format_currency(h['quantity']*p_now)}", 
+                          f"• Lãi: {format_currency(h['quantity']*(p_now-h['average_price']))} ({format_percent(roi)})", draw_line("thin")]
             lines.append(draw_line("thick"))
             return "\n".join(lines)
         except Exception as e: return f"❌ Lỗi Stock: {str(e)}"
