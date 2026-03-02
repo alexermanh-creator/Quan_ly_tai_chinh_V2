@@ -10,18 +10,17 @@ class DashboardModule:
         data = self.db.get_dashboard_data()
         wallets = {w['id']: w for w in data['wallets']}
         
-        # 1. Gốc nạp rút từ hệ thống
+        # 1. Gốc nạp rút từ hệ thống (Vốn thật nạp vào)
         investment_net = wallets['CASH']['total_in'] - wallets['CASH']['total_out']
         
-        # 2. Tổng tài sản hiển thị (Tiền Mẹ + Vốn gốc đang ở các ví con)
-        # Vì total_out của ví con giờ chỉ tăng khi rút vượt lãi, nên Book Value sẽ chuẩn
+        # 2. Tổng tài sản hiển thị (Theo ý Sếp: Tiền Mẹ + Vốn ròng cấp đi)
         asset_home = wallets['CASH']['balance']
         for v_id in ['STOCK', 'CRYPTO']:
             asset_home += (wallets[v_id]['total_in'] - wallets[v_id]['total_out'])
 
-        # 3. Lãi lỗ thực tế (Gồm cả lãi treo chưa thu hồi)
+        # 3. Lãi lỗ thực tế (Gồm cả giá thị trường mới cập nhật)
         current_nav_all = sum(w['balance'] for w in wallets.values())
-        current_nav_all += sum(h['quantity'] * h['average_price'] for h in data['holdings'])
+        current_nav_all += sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in data['holdings'])
         
         pl_real_amt = current_nav_all - investment_net if investment_net > 0 else 0
         pl_real_pct = (pl_real_amt / investment_net * 100) if investment_net > 0 else 0
