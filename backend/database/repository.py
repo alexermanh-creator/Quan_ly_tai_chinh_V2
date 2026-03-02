@@ -14,16 +14,12 @@ class DatabaseRepo:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
             cursor = conn.cursor()
-            # Khởi tạo các ví
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO'), ('OTHER')")
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%')")
-            
-            # --- ÉP THÊM CỘT NẾU CHƯA CÓ ---
-            try:
-                cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
-            except: pass # Nếu có rồi thì bỏ qua
-            
+            # Ép thêm cột current_price nếu db cũ chưa có
+            try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
+            except: pass
             conn.commit()
 
     def execute_query(self, query, params=(), fetch_one=False, fetch_all=False):
@@ -43,35 +39,29 @@ class DatabaseRepo:
         res = self.execute_query("SELECT value FROM settings WHERE key = 'goal'", fetch_one=True)
         return res['value'] if res else "lai 10%"
 
-    def update_market_price(self, symbol, new_price):
-        self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
-
-    def get_dashboard_data(self):
-        wallets = self.execute_query("SELECT * FROM wallets", fetch_all=True)
-        holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
-        # Lấy lãi đã chốt từ bảng transactions
-        realized_rows = self.execute_query("SELECT wallet_id, SUM(realized_pl) as total FROM transactions GROUP BY wallet_id", fetch_all=True)
-        realized_map = {r['wallet_id']: (r['total'] or 0) for r in realized_rows}
-        # Thống kê hiệu suất từng mã
-        perf_symbols = self.execute_query("""
-            SELECT symbol, SUM(realized_pl) as realized, 
-            SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested 
-            FROM transactions WHERE wallet_id = 'STOCK' AND symbol IS NOT NULL GROUP BY symbol
-        """, fetch_all=True)
-        return {"wallets": wallets, "holdings": holdings, "realized": realized_map, "perf_symbols": perf_symbols, "goal": self.get_goal()}
+    def update_cash_balance(self, amount, tx_type):
+        """Hàm xử lý nạp/rút tiền mặt (nap, rut)"""
+        if amount > 0:
+            self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
+        else:
+            self.execute_query("UPDATE wallets SET balance = balance + ?, total_out = total_out + ? WHERE id = 'CASH'", (amount, abs(amount)))
+        self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
+        """Hàm xử lý chuyen/thu nội bộ"""
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (amount, to_wallet))
         if from_wallet == 'CASH': self.execute_query("UPDATE wallets SET total_in = total_in + ? WHERE id = ?", (amount, to_wallet))
         elif to_wallet == 'CASH': self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
+    def update_other_asset(self, symbol, value):
+        self.execute_query("INSERT OR REPLACE INTO holdings (wallet_id, symbol, quantity, average_price, current_price) VALUES ('OTHER', ?, 1, ?, ?)", (symbol.upper(), value, value))
+
     def execute_trade(self, wallet_id, symbol, quantity, price, total_value):
         symbol = symbol.upper()
         wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
         holding = self.execute_query("SELECT quantity, average_price FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
-        
         if quantity > 0: # MUA
             if not wallet or wallet['balance'] < total_value: raise ValueError("Ví không đủ tiền!")
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
@@ -86,9 +76,20 @@ class DatabaseRepo:
             abs_qty = abs(quantity)
             if not holding or holding['quantity'] < abs_qty: raise ValueError("Không đủ hàng!")
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
-            realized_pl = total_value - (abs_qty * holding['average_price'])
+            real_pl = total_value - (abs_qty * holding['average_price'])
             if holding['quantity'] == abs_qty: self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
             else: self.execute_query("UPDATE holdings SET quantity = quantity - ? WHERE wallet_id = ? AND symbol = ?", (abs_qty, wallet_id, symbol))
-            self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, 'BAN', ?, ?, ?, ?, ?)", (wallet_id, symbol, abs_qty, price, total_value, realized_pl))
-            return realized_pl
+            self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, 'BAN', ?, ?, ?, ?, ?)", (wallet_id, symbol, abs_qty, price, total_value, real_pl))
+            return real_pl
         return 0
+
+    def update_market_price(self, symbol, new_price):
+        self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
+
+    def get_dashboard_data(self):
+        wallets = self.execute_query("SELECT * FROM wallets", fetch_all=True)
+        holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
+        realized_rows = self.execute_query("SELECT wallet_id, SUM(realized_pl) as total FROM transactions GROUP BY wallet_id", fetch_all=True)
+        realized_map = {r['wallet_id']: (r['total'] or 0) for r in realized_rows}
+        perf_symbols = self.execute_query("SELECT symbol, SUM(realized_pl) as realized, SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested FROM transactions WHERE wallet_id = 'STOCK' AND symbol IS NOT NULL GROUP BY symbol", fetch_all=True)
+        return {"wallets": wallets, "holdings": holdings, "realized": realized_map, "perf_symbols": perf_symbols, "goal": self.get_goal()}
