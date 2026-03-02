@@ -62,6 +62,26 @@ def handle_commands(message):
             bot.reply_to(message, msg)
         except Exception as e:
             bot.reply_to(message, f"❌ {str(e)}")
+    # Trong main.py, thêm handler này:
+@bot.message_handler(func=lambda message: message.text.lower().startswith('up '))
+def handle_price_update(message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            bot.reply_to(message, "❌ Cú pháp: `up [MÃ] [GIÁ_MỚI]`")
+            return
+            
+        symbol = parts[1].upper()
+        new_price_raw = float(parts[2])
+        
+        # Nhận diện tỷ giá từ config (Stock x1000)
+        from config import RATE_STOCK
+        db.update_market_price(symbol, new_price_raw * RATE_STOCK)
+        
+        bot.reply_to(message, f"✅ Đã cập nhật giá thị trường {symbol}: {new_price_raw:,.1f}k\nBấm [📊 Chứng Khoán] để xem ROI.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Lỗi: {str(e)}")
 
 if __name__ == "__main__":
     bot.infinity_polling()
+
