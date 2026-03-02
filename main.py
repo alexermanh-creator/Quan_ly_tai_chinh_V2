@@ -32,20 +32,38 @@ def stock_trade_help(message):
     bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
-def stock_refresh(message):
-    text = stock_mod.get_dashboard()
-    bot.send_message(message.chat.id, "🔄 Dữ liệu mới nhất:\n\n" + text)
+def stock_price_instruction(message):
+    msg = "🔄 **CẬP NHẬT GIÁ THỊ TRƯỜNG:**\nHãy gõ lệnh: `up [MÃ] [GIÁ]`\n\nVí dụ: `up HPG 35` (Bot tự nhân x1000)"
+    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def stock_report(message):
-    bot.send_message(message.chat.id, "📊 Tính năng đang phát triển...")
+    # NÂNG CẤP: Gọi hàm báo cáo tài chính chi tiết
+    text = stock_mod.get_group_report()
+    bot.send_message(message.chat.id, text)
 
-# --- HANDLER LỆNH GÕ TAY ---
-@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ']))
+# --- HANDLER LỆNH GÕ TAY (Bổ sung lệnh up) ---
+@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'up ']))
 def handle_commands(message):
     text = message.text.lower()
+    
+    # 1. Lệnh Ví
     if text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
         bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
+    
+    # 2. Lệnh cập nhật giá nhanh
+    elif text.startswith('up '):
+        try:
+            parts = message.text.split()
+            symbol = parts[1].upper()
+            new_price = float(parts[2])
+            from config import RATE_STOCK
+            db.update_market_price(symbol, new_price * RATE_STOCK)
+            bot.reply_to(message, f"✅ Đã cập nhật giá {symbol} = {new_price:,.1f}k")
+        except:
+            bot.reply_to(message, "❌ Lỗi cú pháp! VD: `up HPG 35`")
+
+    # 3. Lệnh Giao dịch s, c
     else:
         from backend.core.parser import parse_trade_command
         from config import RATE_STOCK, RATE_CRYPTO
