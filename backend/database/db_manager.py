@@ -8,6 +8,7 @@ class DatabaseManager:
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
+        self._auto_migrate() # Tự động nâng cấp khi chạy trên Railway
 
     @contextmanager
     def get_connection(self):
@@ -19,11 +20,11 @@ class DatabaseManager:
             conn.close()
 
     def _init_db(self):
-        """Khởi tạo cấu trúc bảng chuẩn - Loại bỏ migration thừa, tập trung vào hiệu suất"""
+        """Khởi tạo cấu trúc bảng chuẩn"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Bảng giao dịch: Dùng 'qty' làm chuẩn ngay từ đầu
+            # 1. Bảng giao dịch
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,13 +34,12 @@ class DatabaseManager:
                     qty REAL,
                     price REAL,
                     total_value REAL,
-                    type TEXT, -- BUY, SELL, DEPOSIT, WITHDRAW
+                    type TEXT, -- BUY, SELL, TRANSFER_IN, TRANSFER_OUT
                     date DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # 2. Bảng Portfolio: Lưu trạng thái tài sản hiện tại của User
-            # Giúp truy vấn lệnh /balance hoặc /portfolio cực nhanh
+            # 2. Bảng Portfolio
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS portfolio (
                     user_id INTEGER,
@@ -47,13 +47,13 @@ class DatabaseManager:
                     asset_type TEXT,
                     total_qty REAL DEFAULT 0,
                     avg_price REAL DEFAULT 0,
+                    market_price REAL DEFAULT 0, -- Sẽ được cập nhật tự động ở bước migrate
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, ticker)
                 )
             ''')
 
-            # 3. Các bảng giá (Gộp chung logic lưu trữ giá)
-            # manual_prices dành cho cập nhật tay, stock/crypto dành cho API
+            # 3. Các bảng bổ trợ
             tables = [
                 'manual_prices (ticker TEXT PRIMARY KEY, current_price REAL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)',
                 'stock_prices (ticker TEXT PRIMARY KEY, current_price REAL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)',
@@ -65,6 +65,23 @@ class DatabaseManager:
                 cursor.execute(f'CREATE TABLE IF NOT EXISTS {table_def}')
             
             conn.commit()
-            print("🚀 Database Engine: Trạng thái Sẵn sàng (Logic đã hợp nhất).")
+
+    def _auto_migrate(self):
+        """Bọc thép Railway: Tự động thêm cột thiếu mà không cần can thiệp thủ công"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Kiểm tra cột market_price
+                cursor.execute("SELECT market_price FROM portfolio LIMIT 1")
+            except sqlite3.OperationalError:
+                print("🛠 Railway Alert: Đang nâng cấp bảng portfolio, thêm cột market_price...")
+                try:
+                    cursor.execute("ALTER TABLE portfolio ADD COLUMN market_price REAL DEFAULT 0")
+                    conn.commit()
+                    print("✅ Nâng cấp Database thành công!")
+                except Exception as e:
+                    print(f"❌ Lỗi nâng cấp: {e}")
+        
+        print("🚀 Database Engine: Trạng thái Sẵn sàng (V2.0 Bọc thép).")
 
 db = DatabaseManager()
