@@ -10,15 +10,11 @@ class DashboardModule:
         data = self.db.get_dashboard_data()
         wallets = {w['id']: w for w in data['wallets']}
         
-        # 1. Gốc nạp rút từ hệ thống (Vốn thật nạp vào)
         investment_net = wallets['CASH']['total_in'] - wallets['CASH']['total_out']
-        
-        # 2. Tổng tài sản hiển thị (Theo ý Sếp: Tiền Mẹ + Vốn ròng cấp đi)
         asset_home = wallets['CASH']['balance']
         for v_id in ['STOCK', 'CRYPTO']:
             asset_home += (wallets[v_id]['total_in'] - wallets[v_id]['total_out'])
 
-        # 3. Lãi lỗ thực tế (Gồm cả giá thị trường mới cập nhật)
         current_nav_all = sum(w['balance'] for w in wallets.values())
         current_nav_all += sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in data['holdings'])
         
@@ -29,17 +25,12 @@ class DashboardModule:
             "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0",
             draw_line("thick"),
             f"💰 Tổng tài sản: {format_currency(asset_home)}",
-            f"⬆️ Tổng nạp: {format_currency(wallets['CASH']['total_in'])}",
-            f"⬇️ Tổng rút: {format_currency(wallets['CASH']['total_out'])}",
             f"📈 Lãi/Lỗ tổng: {format_currency(pl_real_amt)} ({format_percent(pl_real_pct)})",
             "",
             "📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):",
-            f"• Vốn Đầu tư (Mẹ): {format_currency(wallets['CASH']['balance'])} 🟢",
+            f"• Ví Mẹ (CASH): {format_currency(wallets['CASH']['balance'])} 🟢",
             f"• Ví Stock: {format_currency(wallets['STOCK']['total_in'] - wallets['STOCK']['total_out'])}",
             f"• Ví Crypto: {format_currency(wallets['CRYPTO']['total_in'] - wallets['CRYPTO']['total_out'])}",
-            "",
-            "🛡️ SỨC KHỎE DANH MỤC:",
-            f"• Trạng thái: Ổn định",
             draw_line("thick")
         ]
         return "\n".join(lines)
