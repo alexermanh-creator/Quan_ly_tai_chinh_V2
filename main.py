@@ -8,30 +8,31 @@ from backend.telegram.bot_client import bot
 from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard
 from backend.database.repository import DatabaseRepo
 from backend.modules.dashboard import DashboardModule
+from backend.modules.stock import StockModule
 from backend.modules.wallet import WalletModule
 
 # Khởi tạo các thành phần
 db = DatabaseRepo()
 dash = DashboardModule()
+stock_mod = StockModule()
 wallet_mod = WalletModule()
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Lệnh /start hiển thị Menu HOME"""
     welcome_text = (
         "🌟 CHÀO MỪNG SẾP ĐẾN VỚI HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0 🌟\n"
         "Hệ thống đã sẵn sàng nhận lệnh. Vui lòng chọn menu bên dưới:"
     )
     bot.send_message(message.chat.id, welcome_text, reply_markup=get_home_keyboard())
 
-# --- ƯU TIÊN 1: XỬ LÝ LỆNH GÕ TAY (WALLET: nap, rut, chuyen, thu) ---
+# --- 1. XỬ LÝ LỆNH VÍ (nap, rut, chuyen, thu) ---
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ']))
 def handle_wallet_commands(message):
     response = wallet_mod.handle_fund_command(message.text)
     if response:
         bot.reply_to(message, response)
 
-# --- ƯU TIÊN 2: XỬ LÝ LỆNH GIAO DỊCH (TRADE: s, c) ---
+# --- 2. XỬ LÝ LỆNH GIAO DỊCH (s, c) ---
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['s ', 'c ']))
 def handle_trading_commands(message):
     from backend.core.parser import parse_trade_command
@@ -57,23 +58,26 @@ def handle_trading_commands(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Lỗi: {str(e)}")
 
-# --- ƯU TIÊN 3: XỬ LÝ NÚT BẤM TỪ BÀN PHÍM ---
+# --- 3. XỬ LÝ NÚT BẤM BÀN PHÍM ---
+
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
 def handle_stock_menu(message):
-    text = dash.get_stock_dashboard()
+    """Bấm nút Stock -> Hiện danh mục STOCK + Đổi bàn phím STOCK"""
+    text = stock_mod.get_dashboard()
     bot.send_message(message.chat.id, text, reply_markup=get_stock_keyboard())
-
-@bot.message_handler(func=lambda message: message.text == "🏠 Trang chủ")
-def handle_home_menu(message):
-    bot.send_message(message.chat.id, "Đã quay lại Màn hình chính 🏠", reply_markup=get_home_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "💼 Tài sản của bạn")
 def show_dashboard(message):
+    """Bấm nút Dashboard -> Hiện tổng quan + Giữ bàn phím HOME"""
     text = dash.get_main_dashboard()
     bot.send_message(message.chat.id, text, reply_markup=get_home_keyboard())
 
-# Khởi chạy hệ thống 24/7
+@bot.message_handler(func=lambda message: message.text == "🏠 Trang chủ")
+def handle_home_menu(message):
+    """Quay lại Menu HOME"""
+    bot.send_message(message.chat.id, "Đã quay lại Màn hình chính 🏠", reply_markup=get_home_keyboard())
+
+# Khởi chạy
 if __name__ == "__main__":
     print("🚀 Hệ điều hành Tài chính V2.0 đang chạy...")
-    # Bỏ tham số non_stop để tránh lỗi xung đột (Conflict)
     bot.infinity_polling()
