@@ -22,7 +22,7 @@ class StockModule:
 
         # --- LOGIC PHÂN TÍCH SIÊU SAO (GỘP LỊCH SỬ & HIỆN TẠI) ---
         perf_map = {}
-        # 1. Lấy dữ liệu lịch sử từ perf_symbols (Realized & Total Invested)
+        # 1. Lấy dữ liệu lịch sử từ perf_symbols (Mã đã bán)
         for p in data['perf_symbols']:
             perf_map[p['symbol']] = {
                 'total_pl': p['realized'],
@@ -35,6 +35,7 @@ class StockModule:
             f_pl = h['quantity'] * (p_now - h['average_price'])
             if h['symbol'] in perf_map:
                 perf_map[h['symbol']]['total_pl'] += f_pl
+                # Invested đã được tính trong history qua các lệnh MUA
             else:
                 perf_map[h['symbol']] = {
                     'total_pl': f_pl,
@@ -48,12 +49,12 @@ class StockModule:
                 roi = (p['total_pl'] / p['invested'] * 100) if p['invested'] > 0 else 0
                 perf_list.append({'sym': sym, 'roi': roi, 'amt': p['total_pl']})
             
-            # Tìm Mã Tốt Nhất (Dựa trên ROI tổng hợp)
+            # Tìm Mã Tốt Nhất (FPT sẽ thắng ở đây)
             best = max(perf_list, key=lambda x: x['roi'])
             prefix_b = "+" if best['amt'] > 0 else ""
             best_info = f"{best['sym']} ({format_percent(best['roi'])}) ({prefix_b}{format_currency(best['amt'])})"
             
-            # Chỉ hiện Mã Kém Nhất nếu có từ 2 mã khác nhau trở lên
+            # Tìm Mã Kém Nhất (HPG sẽ nằm ở đây)
             if len(perf_list) > 1:
                 worst = min(perf_list, key=lambda x: x['roi'])
                 if worst['sym'] != best['sym']:
@@ -92,13 +93,19 @@ class StockModule:
             ]
             contrib = [p for p in data['perf_symbols'] if p['realized'] > 0][:3]
             if not contrib: lines.append("• Chưa có dữ liệu lãi.")
-            for i, p in enumerate(contrib, 1): lines.append(f"{i}. {p['symbol']}: +{format_currency(p['realized'])}")
+            else:
+                for i, p in enumerate(contrib, 1):
+                    lines.append(f"{i}. {p['symbol']}: +{format_currency(p['realized'])}")
             
             lines += ["", "⚠️ Top Kéo Lùi (Lỗ chốt):"]
             drag = [p for p in data['perf_symbols'] if p['realized'] < 0][::-1][:3]
             if not drag: lines.append("• Chưa có dữ liệu lỗ.")
-            for i, p in enumerate(drag, 1): lines.append(f"{i}. {p['symbol']}: {format_currency(p['realized'])}")
-            lines.append(draw_line("thin"), "📊 CHI TIẾT DANH MỤC HIỆN TẠI:")
+            else:
+                for i, p in enumerate(drag, 1):
+                    lines.append(f"{i}. {p['symbol']}: {format_currency(p['realized'])}")
+            
+            lines.append(draw_line("thin"))
+            lines.append("📊 CHI TIẾT DANH MỤC HIỆN TẠI:")
 
         for h in holdings:
             p_now = h['current_price'] or h['average_price']
