@@ -12,11 +12,13 @@ class StockModule:
             w = next((x for x in data['wallets'] if x['id'] == 'STOCK'), {'total_in':0, 'total_out':0, 'balance':0})
             holdings = [h for h in data['holdings'] if h['wallet_id'] == 'STOCK']
             
+            # Tính toán
             gt_thi_truong = sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in holdings)
             nav = w['balance'] + gt_thi_truong
             von_rong = w['total_in'] - w['total_out']
             pl_tong = data['realized'].get('STOCK', 0) + (gt_thi_truong - sum(h['quantity'] * h['average_price'] for h in holdings))
 
+            # Logic mã tốt/kém
             best_info, worst_info, max_sym, max_pct = "--", "--", "--", 0
             perf_list = []
             perf_map = {p['symbol']: {'pl': p['realized'], 'inv': p['total_invested']} for p in data['perf_symbols']}
@@ -41,7 +43,7 @@ class StockModule:
             lines = [
                 "📊 DANH MỤC CỔ PHIẾU", draw_line("thick"),
                 f"💰 Tổng giá trị: {format_currency(nav)}",
-                f"🏦 Tổng vốn: {format_currency(von_rong)}",
+                f"💵 Tổng vốn: {format_currency(von_rong)}",
                 f"💸 Sức mua: {format_currency(w['balance'])}",
                 f"📈 Lãi/Lỗ: {format_currency(pl_tong)} ({format_percent(pl_tong/von_rong*100 if von_rong>0 else 0)})",
                 f"⬆️ Tổng nạp ví: {format_currency(w['total_in'])}",
