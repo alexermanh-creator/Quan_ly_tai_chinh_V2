@@ -17,6 +17,7 @@ wallet_mod = WalletModule()
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    """Lệnh /start hiển thị Menu HOME"""
     welcome_text = (
         "🌟 CHÀO MỪNG SẾP ĐẾN VỚI HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0 🌟\n"
         "Hệ thống đã sẵn sàng nhận lệnh. Vui lòng chọn menu bên dưới:"
@@ -24,14 +25,14 @@ def send_welcome(message):
     bot.send_message(message.chat.id, welcome_text, reply_markup=get_home_keyboard())
 
 # --- ƯU TIÊN 1: XỬ LÝ LỆNH GÕ TAY (WALLET: nap, rut, chuyen, thu) ---
-@bot.message_handler(func=lambda message: message.text.lower().startswith(('nap ', 'rut ', 'chuyen ', 'thu ')))
+@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ']))
 def handle_wallet_commands(message):
     response = wallet_mod.handle_fund_command(message.text)
     if response:
         bot.reply_to(message, response)
 
 # --- ƯU TIÊN 2: XỬ LÝ LỆNH GIAO DỊCH (TRADE: s, c) ---
-@bot.message_handler(func=lambda message: message.text.lower().startswith(('s ', 'c ')))
+@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['s ', 'c ']))
 def handle_trading_commands(message):
     from backend.core.parser import parse_trade_command
     from config import RATE_STOCK, RATE_CRYPTO
@@ -74,4 +75,5 @@ def show_dashboard(message):
 # Khởi chạy hệ thống 24/7
 if __name__ == "__main__":
     print("🚀 Hệ điều hành Tài chính V2.0 đang chạy...")
-    bot.infinity_polling(non_stop=True) # Thêm non_stop để bot tự khởi động lại khi mất mạng
+    # Bỏ tham số non_stop để tránh lỗi xung đột (Conflict)
+    bot.infinity_polling()
