@@ -47,7 +47,7 @@ def handle_all_commands(message):
 
 @bot.message_handler(func=lambda message: message.text in ["💼 Tài sản của bạn", "🏠 Trang chủ"])
 def show_home(message):
-    """Nâng cấp: Nút Trang chủ hiển thị luôn Dashboard"""
+    """Bấm Trang chủ hoặc Tài sản -> Show Dashboard Tổng"""
     text = dash.get_main_dashboard()
     bot.send_message(message.chat.id, text, reply_markup=get_home_keyboard())
 
@@ -56,27 +56,21 @@ def show_stock(message):
     text = stock_mod.get_dashboard()
     bot.send_message(message.chat.id, text, reply_markup=get_stock_keyboard())
 
-# --- 3. KÍCH HOẠT CÁC NÚT TRONG MENU STOCK ---
-
+# --- KÍCH HOẠT CÁC NÚT TRONG MENU STOCK ---
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
-def stock_trade_info(message):
-    info = (
-        "📝 HƯỚNG DẪN GIAO DỊCH STOCK:\n"
-        "• MUA: `s [MÃ] [SL] [GIÁ]` (vd: `s HPG 100 30`)\n"
-        "• BÁN: `s [MÃ] -[SL] [GIÁ]` (vd: `s HPG -100 35`)\n"
-        "⚠️ Hệ thống tự nhân x1000 cho giá cổ phiếu."
-    )
-    bot.send_message(message.chat.id, info, parse_mode="Markdown")
+def stock_trade_help(message):
+    msg = "📝 **HƯỚNG DẪN LỆNH:**\n• Mua: `s HPG 100 30`\n• Bán: `s HPG -100 35`"
+    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def stock_refresh(message):
-    # Tạm thời chỉ làm mới giao diện với dữ liệu hiện tại
     text = stock_mod.get_dashboard()
-    bot.send_message(message.chat.id, "🔄 Đã cập nhật dữ liệu mới nhất:\n\n" + text)
+    bot.send_message(message.chat.id, "🔄 Dữ liệu đã được làm mới:\n\n" + text)
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def stock_report(message):
-    bot.send_message(message.chat.id, "📊 Tính năng Báo cáo phân tích đang được phát triển...")
+def stock_group_report(message):
+    bot.send_message(message.chat.id, "📊 Tính năng phân tích nhóm đang được xây dựng...")
 
 if __name__ == "__main__":
     bot.infinity_polling()
+
