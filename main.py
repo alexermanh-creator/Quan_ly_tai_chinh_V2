@@ -23,7 +23,7 @@ def show_stock(message):
     bot.send_message(message.chat.id, stock_mod.get_dashboard(), reply_markup=get_stock_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def stock_report(message):
+def show_report(message):
     bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'up ']))
@@ -38,13 +38,12 @@ def handle_commands(message):
             from config import RATE_STOCK
             db.update_market_price(symbol, price * RATE_STOCK)
             bot.reply_to(message, f"✅ Cập nhật {symbol} = {price:,.1f}k")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Lỗi cập nhật: {str(e)}")
+        except: bot.reply_to(message, "❌ Cú pháp: `up HPG 35`")
     else:
         from backend.core.parser import parse_trade_command
         from config import RATE_STOCK, RATE_CRYPTO
         parsed = parse_trade_command(message.text)
-        if not parsed: return bot.reply_to(message, "❌ Sai cú pháp.")
+        if not parsed: return
         w_type, sym, qty, price = parsed
         rate = RATE_STOCK if w_type == 'STOCK' else RATE_CRYPTO
         try:
@@ -52,8 +51,7 @@ def handle_commands(message):
             msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {abs(qty)} {sym}"
             if qty < 0: msg += f"\n💰 Lãi chốt: {res:,.0f} đ"
             bot.reply_to(message, msg)
-        except Exception as e:
-            bot.reply_to(message, f"❌ {str(e)}")
+        except Exception as e: bot.reply_to(message, f"❌ {str(e)}")
 
 if __name__ == "__main__":
     bot.infinity_polling()
