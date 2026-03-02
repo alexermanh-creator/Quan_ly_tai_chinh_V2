@@ -7,38 +7,44 @@ class DashboardModule:
         self.db = DatabaseRepo()
 
     def get_main_dashboard(self):
-        """Render Layout Dashboard Tổng (Vĩ mô)"""
         data = self.db.get_dashboard_data()
         wallets = {w['id']: w for w in data['wallets']}
         
-        # Tổng tài sản = Tiền mặt các ví + Giá trị holdings hiện có
-        cash_all = sum(w['balance'] for w in wallets.values())
-        holding_val = sum(h['quantity'] * h['average_price'] for h in data['holdings'])
-        total_asset = cash_all + holding_val
+        # 1. Tiền mặt tại Ví Mẹ
+        cash_mother = wallets['CASH']['balance']
         
-        # Vốn ròng = Nạp - Rút (Chỉ tính tại Ví Mẹ)
-        net_investment = wallets['CASH']['total_in'] - wallets['CASH']['total_out']
+        # 2. Vốn thực tế đang nằm tại các ví con (Cấp đi - Thu về)
+        # Đây chính là con số "Vốn ròng" mà Sếp cấp cho mặt trận đó
+        capital_stock = wallets['STOCK']['total_in'] - wallets['STOCK']['total_out']
+        capital_crypto = wallets['CRYPTO']['total_in'] - wallets['CRYPTO']['total_out']
         
-        # Lãi lỗ tổng
-        pl_total = total_asset - net_investment if net_investment != 0 else 0
-        pl_percent = (pl_total / net_investment * 100) if net_investment > 0 else 0
+        # CHỐT LOGIC: Tổng tài sản = Tiền túi Mẹ + Vốn đã rót đi
+        total_asset = cash_mother + capital_stock + capital_crypto
+        
+        # Tổng nạp từ ngoài vào hệ thống
+        total_nap_goc = wallets['CASH']['total_in']
+        total_rut_goc = wallets['CASH']['total_out']
+        investment_goc = total_nap_goc - total_rut_goc
+        
+        # Lãi/Lỗ tổng ở trang chủ: Chỉ hiện số tiền ĐÃ THU HỒI về Ví Mẹ so với gốc nạp
+        pl_total = total_asset - investment_goc
+        pl_percent = (pl_total / investment_goc * 100) if investment_goc > 0 else 0
 
         lines = [
             "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0",
             draw_line("thick"),
             f"💰 Tổng tài sản: {format_currency(total_asset)}",
-            f"⬆️ Tổng nạp: {format_currency(wallets['CASH']['total_in'])}",
-            f"⬇️ Tổng rút: {format_currency(wallets['CASH']['total_out'])}",
+            f"⬆️ Tổng nạp: {format_currency(total_nap_goc)}",
+            f"⬇️ Tổng rút: {format_currency(total_rut_goc)}",
             f"📈 Lãi/Lỗ tổng: {format_currency(pl_total)} ({format_percent(pl_percent)})",
             "",
-            "📦 PHÂN BỔ NGUỒN VỐN:",
-            f"• Vốn Đầu tư (Mẹ): {format_currency(wallets['CASH']['balance'])} 🟢",
-            f"• Ví Stock: {format_currency(wallets['STOCK']['balance'])}",
-            f"• Ví Crypto: {format_currency(wallets['CRYPTO']['balance'])}",
+            "📦 PHÂN BỔ NGUỒN VỐN (BOOK VALUE):",
+            f"• Vốn Đầu tư (Mẹ): {format_currency(cash_mother)} 🟢",
+            f"• Ví Stock: {format_currency(capital_stock)}",
+            f"• Ví Crypto: {format_currency(capital_crypto)}",
             "",
             "🛡️ SỨC KHỎE DANH MỤC:",
-            f"• Tiền mặt: {format_percent(cash_all/total_asset*100 if total_asset > 0 else 0)}",
-            "• Trạng thái: An toàn",
+            f"• Trạng thái: An toàn",
             draw_line("thick")
         ]
         return "\n".join(lines)
