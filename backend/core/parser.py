@@ -1,33 +1,32 @@
-# backend/core/registry.py
+import re
 
-ASSET_REGISTRY = {
-    'STOCK': {
-        'display_name': '📊 Cổ phiếu',
-        'currency': 'VND',
-        'unit': 'CP',
-        'icon': '📊',
-        'price_table': 'stock_prices',
-        'id_column': 'ticker',
-        'price_column': 'current_price',
-        'rate': 1,  # Tỷ giá so với VND
-        'precision': 0 # Số chữ số sau dấu phẩy
-    },
-    'CRYPTO': {
-        'display_name': '🪙 Crypto',
-        'currency': 'USD',
-        'unit': 'Coin',
-        'icon': '🪙',
-        'price_table': 'crypto_prices',
-        'id_column': 'symbol',
-        'price_column': 'price_usd',
-        'rate': 26300, # Tỷ giá USD/VND (Sẽ update từ fetcher sau)
-        'precision': 4
-    },
-    # Sau này muốn thêm GOLD chỉ cần thêm 1 block ở đây
-}
+def parse_trade_command(text):
+    """
+    Bóc tách lệnh mua bán cổ phiếu/crypto.
+    Hỗ trợ: s HAH 400 80 (Mua) hoặc s HAH -400 80 (Bán)
+    Trả về: (loại_ví, mã, số_lượng, giá) hoặc None nếu sai cú pháp
+    """
+    text = text.strip().lower()
+    
+    # Regex bắt cú pháp: chữ s/c + khoảng trắng + chữ/số (mã) + khoảng trắng + số (âm/dương) + khoảng trắng + số
+    pattern = r'^(s|c)\s+([a-zA-Z0-9]+)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$'
+    match = re.match(pattern, text)
+    
+    if not match:
+        return None
+        
+    wallet_type = 'STOCK' if match.group(1) == 's' else 'CRYPTO'
+    symbol = match.group(2).upper()
+    quantity = float(match.group(3))
+    price = float(match.group(4))
+    
+    return wallet_type, symbol, quantity, price
 
-# Danh mục lệnh để Parser tự điều hướng
-COMMAND_MAP = {
-    'vpb': 'STOCK', 'hpg': 'STOCK', 'vnm': 'STOCK', 'tcbs': 'STOCK',
-    'btc': 'CRYPTO', 'eth': 'CRYPTO', 'sol': 'CRYPTO', 'usdt': 'CRYPTO'
-}
+def parse_fund_command(text):
+    """
+    Bóc tách lệnh nạp/rút tiền mẹ, hoặc chuyển tiền ví con.
+    Ví dụ: nap 10 ty, rut 500 trieu, chuyen stock 1 ty
+    """
+    # Xử lý quy đổi chữ thành số (ty -> * 1_000_000_000, trieu -> * 1_000_000)
+    # Phần này sẽ được nâng cấp logic chi tiết ở các module xử lý sau
+    return text.strip().lower().split()
