@@ -1,4 +1,3 @@
-# backend/database/repository.py
 import sqlite3
 import os
 from .models import SCHEMA
@@ -34,20 +33,25 @@ class DatabaseRepo:
             return cursor.lastrowid
 
     def update_cash_balance(self, amount, tx_type):
-        """Nạp/Rút trực tiếp từ túi người dùng vào Ví Mẹ"""
-        if amount > 0: # NẠP
+        """Nạp/Rút tiền THẬT từ ngoài vào Ví Mẹ"""
+        if amount > 0: # Nạp
             self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
-        else: # RÚT
+        else: # Rút
             self.execute_query("UPDATE wallets SET balance = balance + ?, total_out = total_out + ? WHERE id = 'CASH'", (amount, abs(amount)))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
-        """Chuyển tiền nội bộ giữa các ví"""
+        """Luân chuyển nội bộ (Không làm tăng nạp/rút tổng hệ thống)"""
         # Trừ ví gửi
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         # Cộng ví nhận
         self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (amount, to_wallet))
-        
+        # Ghi nhận biến động riêng của ví con để làm Dashboard
+        if from_wallet != 'CASH':
+            self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (amount, from_wallet))
+        if to_wallet != 'CASH':
+            self.execute_query("UPDATE wallets SET total_in = total_in + ? WHERE id = ?", (amount, to_wallet))
+            
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_OUT', ?)", (from_wallet, -amount))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
@@ -55,35 +59,27 @@ class DatabaseRepo:
         symbol = symbol.upper()
         is_buy = quantity > 0
         abs_qty = abs(quantity)
-        
         holding = self.execute_query("SELECT quantity, average_price FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
         realized_pl = 0
 
         if is_buy:
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
             if holding:
-                old_qty = holding['quantity']
-                old_avg = holding['average_price']
-                new_qty = old_qty + abs_qty
-                new_avg = ((old_qty * old_avg) + total_value) / new_qty
+                new_qty = holding['quantity'] + abs_qty
+                new_avg = ((holding['quantity'] * holding['average_price']) + total_value) / new_qty
                 self.execute_query("UPDATE holdings SET quantity = ?, average_price = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, new_avg, wallet_id, symbol))
             else:
                 self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price) VALUES (?, ?, ?, ?)", (wallet_id, symbol, abs_qty, price))
-            tx_type = 'MUA'
-            amount_log = -total_value
+            tx_type, amount_log = 'MUA', -total_value
         else:
-            if not holding or holding['quantity'] < abs_qty:
-                raise ValueError(f"Không đủ {symbol} để bán!")
+            if not holding or holding['quantity'] < abs_qty: raise ValueError(f"Không đủ {symbol} để bán!")
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
             cost_basis = abs_qty * holding['average_price']
             realized_pl = total_value - cost_basis
             new_qty = holding['quantity'] - abs_qty
-            if new_qty <= 0:
-                self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
-            else:
-                self.execute_query("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
-            tx_type = 'BAN'
-            amount_log = total_value
+            if new_qty <= 0: self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
+            else: self.execute_query("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
+            tx_type, amount_log = 'BAN', total_value
 
         self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (wallet_id, tx_type, symbol, abs_qty, price, amount_log, realized_pl))
@@ -92,6 +88,4 @@ class DatabaseRepo:
     def get_dashboard_data(self):
         wallets = self.execute_query("SELECT * FROM wallets", fetch_all=True)
         holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
-        # Tính tổng Lãi lỗ chốt từ lịch sử giao dịch
-        pl_data = self.execute_query("SELECT SUM(realized_pl) as total_pl FROM transactions", fetch_one=True)
-        return {"wallets": wallets, "holdings": holdings, "realized_pl": pl_data['total_pl'] or 0}
+        return {"wallets": wallets, "holdings": holdings}
