@@ -1,33 +1,14 @@
-# backend/core/registry.py
+import telebot
+import sys
+import os
 
-ASSET_REGISTRY = {
-    'STOCK': {
-        'display_name': '📊 Cổ phiếu',
-        'currency': 'VND',
-        'unit': 'CP',
-        'icon': '📊',
-        'price_table': 'stock_prices',
-        'id_column': 'ticker',
-        'price_column': 'current_price',
-        'rate': 1,  # Tỷ giá so với VND
-        'precision': 0 # Số chữ số sau dấu phẩy
-    },
-    'CRYPTO': {
-        'display_name': '🪙 Crypto',
-        'currency': 'USD',
-        'unit': 'Coin',
-        'icon': '🪙',
-        'price_table': 'crypto_prices',
-        'id_column': 'symbol',
-        'price_column': 'price_usd',
-        'rate': 26300, # Tỷ giá USD/VND (Sẽ update từ fetcher sau)
-        'precision': 4
-    },
-    # Sau này muốn thêm GOLD chỉ cần thêm 1 block ở đây
-}
+# Đảm bảo có thể import từ config ở thư mục gốc
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from config import TOKEN
 
-# Danh mục lệnh để Parser tự điều hướng
-COMMAND_MAP = {
-    'vpb': 'STOCK', 'hpg': 'STOCK', 'vnm': 'STOCK', 'tcbs': 'STOCK',
-    'btc': 'CRYPTO', 'eth': 'CRYPTO', 'sol': 'CRYPTO', 'usdt': 'CRYPTO'
-}
+if not TOKEN:
+    print("❌ LỖI: Chưa tìm thấy TELEGRAM_BOT_TOKEN trong file .env")
+    sys.exit(1)
+
+# Khởi tạo thực thể bot duy nhất (Singleton)
+bot = telebot.TeleBot(TOKEN)
