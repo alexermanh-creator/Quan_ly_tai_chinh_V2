@@ -7,44 +7,51 @@ class StockModule:
         self.db = DatabaseRepo()
 
     def get_dashboard(self):
-        """Render giao diện chi tiết Danh mục Chứng khoán chuẩn Layout"""
+        """Render giao diện chi tiết Danh mục Chứng khoán chuẩn Logic: NAV = Tiền + Cổ"""
         data = self.db.get_dashboard_data()
-        # Tìm ví STOCK
         stock_wallet = next((w for w in data['wallets'] if w['id'] == 'STOCK'), None)
-        # Lấy danh mục hàng đang giữ ở ví STOCK
         holdings = [h for h in data['holdings'] if h['wallet_id'] == 'STOCK']
         
-        # 1. Tính toán con số tổng
-        total_val = sum(h['quantity'] * h['average_price'] for h in holdings)
-        # Hiện giá tạm tính bằng giá vốn (Lãi treo = 0)
-        total_von = total_val 
+        # 1. Định nghĩa các thông số cơ bản
         suc_mua = stock_wallet['balance'] if stock_wallet else 0
+        total_holdings_val = sum(h['quantity'] * h['average_price'] for h in holdings)
         
-        # 2. Tính toán Tỉ trọng lớn nhất
-        max_weight_symbol = "--"
-        max_weight_pct = 0
-        if total_val > 0:
+        # CHỐT: Tổng giá trị (NAV) = Tiền mặt + Giá trị cổ phiếu
+        nav_stock = suc_mua + total_holdings_val
+        
+        # CHỐT: Tổng vốn = Tiền nạp vào ví - Tiền rút ra khỏi ví
+        total_nap_vi = stock_wallet['total_in'] if stock_wallet else 0
+        total_rut_vi = stock_wallet['total_out'] if stock_wallet else 0
+        von_rong_vi = total_nap_vi - total_rut_vi
+        
+        # 2. Tính toán Hiệu quả (Lãi/Lỗ)
+        # Lãi/Lỗ = NAV hiện tại - Vốn ròng
+        total_pl = nav_stock - von_rong_vi if von_rong_vi != 0 else 0
+        pl_percent = (total_pl / von_rong_vi * 100) if von_rong_vi > 0 else 0
+        
+        # 3. Phân tích mã (Tỉ trọng)
+        max_weight_symbol, max_weight_pct = "--", 0
+        if total_holdings_val > 0:
             best_h = max(holdings, key=lambda x: x['quantity'] * x['average_price'])
             max_weight_symbol = best_h['symbol']
-            max_weight_pct = (best_h['quantity'] * best_h['average_price'] / total_val) * 100
+            max_weight_pct = (best_h['quantity'] * best_h['average_price'] / nav_stock) * 100
 
-        # 3. Render Layout theo yêu cầu của Sếp
+        # 4. Render Giao diện
         lines = [
             "📊 DANH MỤC CỔ PHIẾU",
             draw_line("thick"),
-            f"💰 Tổng giá trị: {format_currency(total_val)}",
-            f"💵 Tổng vốn: {format_currency(total_von)}",
+            f"💰 Tổng giá trị: {format_currency(nav_stock)}",
+            f"💵 Tổng vốn: {format_currency(von_rong_vi)}",
             f"💸 Sức mua: {format_currency(suc_mua)}",
-            f"📈 Lãi/Lỗ: 0 đ (+0.0%)",
-            f"⬆️ Tổng nạp ví: {format_currency(stock_wallet['total_in'] if stock_wallet else 0)}",
-            f"⬇️ Tổng rút ví: {format_currency(stock_wallet['total_out'] if stock_wallet else 0)}",
-            f"🏆 Mã tốt nhất: -- (+0.0%)",
-            f"📉 Mã kém nhất: -- (+0.0%)",
+            f"📈 Lãi/Lỗ: {format_currency(total_pl)} ({format_percent(pl_percent)})",
+            f"⬆️ Tổng nạp ví: {format_currency(total_nap_vi)}",
+            f"⬇️ Tổng rút ví: {format_currency(total_rut_vi)}",
+            f"🏆 Mã tốt nhất: --",
+            f"📉 Mã kém nhất: --",
             f"📊 Tỉ trọng lớn nhất: {max_weight_symbol} ({max_weight_pct:.1f}%)",
             draw_line("thin")
         ]
 
-        # 4. Danh sách mã chi tiết
         if not holdings:
             lines.append("❌ Danh mục hiện đang trống.")
         else:
