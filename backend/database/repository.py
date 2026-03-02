@@ -97,8 +97,6 @@ class DatabaseRepo:
 
     def update_market_price(self, symbol, new_price):
         return self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
-
-    # backend/database/repository.py
 # ... (giữ nguyên các phần trên) ...
 
     def get_dashboard_data(self):
@@ -132,4 +130,5 @@ class DatabaseRepo:
             "stats": stats if stats else {'total_buy': 0, 'total_sell': 0},
             "perf_symbols": perf_by_symbol if perf_by_symbol else []
         }
+
 
