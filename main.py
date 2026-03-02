@@ -20,15 +20,10 @@ def show_home(message): bot.send_message(message.chat.id, dash.get_main_dashboar
 def show_stock(message): bot.send_message(message.chat.id, stock_mod.get_dashboard(), reply_markup=get_stock_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
-def trade_ins(message):
-    bot.reply_to(message, "➕ Gõ: `s [MÃ] [SL] [GIÁ]`\nVí dụ: `s HPG 1000 28.5`")
+def trade_ins(message): bot.reply_to(message, "➕ Gõ: `s [MÃ] [SL] [GIÁ]`\nVí dụ: `s HPG 1000 28.5`")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
-def refresh_ins(message):
-    bot.reply_to(message, "🔄 Gõ: `up [MÃ] [GIÁ]`\nVí dụ: `up FPT 120`")
-
-@bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def show_rep(message): bot.reply_to(message, "📈 Tính năng báo cáo chi tiết đang tải...")
+def refresh_ins(message): bot.reply_to(message, "🔄 Gõ: `up [MÃ] [GIÁ]`\nVí dụ: `up FPT 120`")
 
 @bot.message_handler(func=lambda message: message.text.lower().startswith('set goal '))
 def handle_set_goal(message):
@@ -64,11 +59,9 @@ def handle_all(message):
         rate = RATE_STOCK if w_type == 'STOCK' else RATE_CRYPTO
         try:
             res = db.execute_trade(w_type, sym, qty, price * rate, abs(qty) * price * rate)
-            bot.reply_to(message, f"✅ Khớp {sym}" + (f"\n💰 Lãi: {res:,.0f}" if qty<0 else ""))
+            bot.reply_to(message, f"✅ Khớp {sym}" + (f"\n💰 Lãi chốt: {res:,.0f} đ" if qty<0 else ""))
         except Exception as e: bot.reply_to(message, f"❌ {str(e)}")
 
 if __name__ == "__main__":
     print("🚀 Bot Finance V2.0 đang trực chiến...")
-    while True:
-        try: bot.polling(none_stop=True, interval=0, timeout=20)
-        except: time.sleep(5)
+    bot.infinity_polling()
