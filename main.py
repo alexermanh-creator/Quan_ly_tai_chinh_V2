@@ -64,3 +64,13 @@ def handle_smart_hints(message):
 
 if __name__ == "__main__":
     bot.infinity_polling()
+if __name__ == "__main__":
+    print("🚀 Bot Finance V2.0 đang trực chiến...")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            print(f"⚠️ Lỗi kết nối Telegram: {e}")
+            import time
+            time.sleep(5) # Đợi 5 giây rồi tự khởi động lại
+
