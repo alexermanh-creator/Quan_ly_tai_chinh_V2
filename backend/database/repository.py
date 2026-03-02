@@ -16,10 +16,9 @@ class DatabaseRepo:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
             cursor = conn.cursor()
-            # Khởi tạo ví
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO')")
             
-            # TỰ ĐỘNG NÂNG CẤP: Kiểm tra và thêm cột current_price nếu chưa có
+            # Tự động kiểm tra và thêm cột current_price nếu chưa có
             cursor.execute("PRAGMA table_info(holdings)")
             columns = [column[1] for column in cursor.fetchall()]
             if 'current_price' not in columns:
@@ -66,55 +65,61 @@ class DatabaseRepo:
         symbol = symbol.upper()
         is_buy = quantity > 0
         abs_qty = abs(quantity)
-        
         wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
         holding = self.execute_query("SELECT quantity, average_price FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            try:
-                if is_buy:
-                    if not wallet or wallet['balance'] < total_value:
-                        raise ValueError(f"Ví {wallet_id} không đủ tiền! Sức mua: {wallet['balance'] if wallet else 0:,.0f} đ.")
-                    
-                    # Trừ tiền
-                    cursor.execute("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
-                    if holding:
-                        new_qty = holding['quantity'] + abs_qty
-                        new_avg = ((holding['quantity'] * holding['average_price']) + total_value) / new_qty
-                        cursor.execute("UPDATE holdings SET quantity = ?, average_price = ?, current_price = ? WHERE wallet_id = ? AND symbol = ?", 
-                                     (new_qty, new_avg, price, wallet_id, symbol))
-                    else:
-                        cursor.execute("INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price) VALUES (?, ?, ?, ?, ?)", 
-                                     (wallet_id, symbol, abs_qty, price, price))
-                    realized_pl = 0
+        
+        try:
+            if is_buy:
+                if not wallet or wallet['balance'] < total_value:
+                    raise ValueError(f"Ví {wallet_id} không đủ tiền!")
+                self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value, wallet_id))
+                if holding:
+                    new_qty = holding['quantity'] + abs_qty
+                    new_avg = ((holding['quantity'] * holding['average_price']) + total_value) / new_qty
+                    self.execute_query("UPDATE holdings SET quantity = ?, average_price = ?, current_price = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, new_avg, price, wallet_id, symbol))
                 else:
-                    if not holding or holding['quantity'] < abs_qty:
-                        raise ValueError(f"Không đủ {symbol} để bán!")
-                    cursor.execute("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
-                    realized_pl = total_value - (abs_qty * holding['average_price'])
-                    new_qty = holding['quantity'] - abs_qty
-                    if new_qty <= 0:
-                        cursor.execute("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
-                    else:
-                        cursor.execute("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
-
-                # Ghi log transaction
-                cursor.execute("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (wallet_id, 'MUA' if is_buy else 'BAN', symbol, abs_qty, price, -total_value if is_buy else total_value, realized_pl))
-                conn.commit()
-                return realized_pl
-            except Exception as e:
-                conn.rollback()
-                raise e
+                    self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price) VALUES (?, ?, ?, ?, ?)", (wallet_id, symbol, abs_qty, price, price))
+                realized_pl = 0
+            else:
+                if not holding or holding['quantity'] < abs_qty: raise ValueError(f"Không đủ {symbol} để bán!")
+                self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value, wallet_id))
+                realized_pl = total_value - (abs_qty * holding['average_price'])
+                new_qty = holding['quantity'] - abs_qty
+                if new_qty <= 0: self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
+                else: self.execute_query("UPDATE holdings SET quantity = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, wallet_id, symbol))
+            
+            self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (wallet_id, 'MUA' if is_buy else 'BAN', symbol, abs_qty, price, -total_value if is_buy else total_value, realized_pl))
+            return realized_pl
+        except Exception as e:
+            raise e
 
     def update_market_price(self, symbol, new_price):
-        symbol = symbol.upper()
-        res = self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol))
-        return res
+        return self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
 
     def get_dashboard_data(self):
         wallets = self.execute_query("SELECT * FROM wallets", fetch_all=True)
         holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
-        pl_data = self.execute_query("SELECT wallet_id, SUM(realized_pl) as realized FROM transactions GROUP BY wallet_id", fetch_all=True)
-        return {"wallets": wallets, "holdings": holdings, "realized": {r['wallet_id']: r['realized'] for r in pl_data}}
+        # Thống kê giao dịch & Lãi chốt từng mã
+        tx_stats = self.execute_query("""
+            SELECT 
+                SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_buy,
+                SUM(CASE WHEN type='BAN' THEN amount ELSE 0 END) as total_sell,
+                SUM(realized_pl) as total_realized
+            FROM transactions WHERE wallet_id = 'STOCK'
+        """, fetch_one=True)
+        
+        pl_by_symbol = self.execute_query("""
+            SELECT symbol, SUM(realized_pl) as pl 
+            FROM transactions 
+            WHERE wallet_id = 'STOCK' AND symbol IS NOT NULL 
+            GROUP BY symbol HAVING pl != 0 
+            ORDER BY pl DESC
+        """, fetch_all=True)
+        
+        return {
+            "wallets": wallets, 
+            "holdings": holdings, 
+            "stats": tx_stats,
+            "pl_symbols": pl_by_symbol
+        }
