@@ -17,7 +17,6 @@ class DatabaseRepo:
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO'), ('OTHER')")
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%'), ('crypto_rate', '25000')")
-            # Nâng cấp bảng holdings để lưu giá vốn VNĐ thực tế
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
             except: pass
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN cost_basis_vnd REAL DEFAULT 0")
@@ -34,11 +33,7 @@ class DatabaseRepo:
                 return dict(row) if row else None
             return [dict(row) for row in cursor.fetchall()] if fetch_all else cursor.lastrowid
 
-    def set_goal(self, goal_str):
-        self.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('goal', ?)", (goal_str,))
-
     def update_cash_balance(self, amount, tx_type):
-        """Ví Mẹ (CASH) là nơi duy nhất tính Tổng Nạp/Rút hệ thống"""
         if amount > 0:
             self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
         else:
@@ -46,23 +41,21 @@ class DatabaseRepo:
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
-        """Chuyển vốn: Cập nhật total_in cho ví con để tính ROI chuẩn"""
+        """Chuyển vốn: total_in/out của ví con dùng để tính vốn gốc đứng im"""
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = ?", (amount, amount, to_wallet))
+        if from_wallet != 'CASH': # Nếu thu hồi tiền về ví mẹ
+            self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
     def execute_trade(self, wallet_id, symbol, quantity, price, total_value_vnd):
         symbol = symbol.upper()
-        wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
         holding = self.execute_query("SELECT quantity, average_price, cost_basis_vnd FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
-        
         if quantity > 0: # MUA
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value_vnd, wallet_id))
             if holding:
                 new_qty = holding['quantity'] + quantity
                 new_cost = holding['cost_basis_vnd'] + total_value_vnd
-                new_avg = new_cost / (new_qty * (total_value_vnd / (quantity * price)) if wallet_id == 'CRYPTO' else new_qty)
-                # Đơn giản nhất: average_price lưu theo đơn vị gốc (USD hoặc VNĐ)
                 new_avg = (holding['quantity'] * holding['average_price'] + quantity * price) / new_qty
                 self.execute_query("UPDATE holdings SET quantity = ?, average_price = ?, current_price = ?, cost_basis_vnd = ? WHERE wallet_id = ? AND symbol = ?", (new_qty, new_avg, price, new_cost, wallet_id, symbol))
             else:
@@ -71,10 +64,8 @@ class DatabaseRepo:
         else: # BÁN
             abs_qty = abs(quantity)
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value_vnd, wallet_id))
-            # Tính lãi dựa trên cost_basis_vnd thực tế
             cost_per_unit = holding['cost_basis_vnd'] / holding['quantity']
             real_pl = total_value_vnd - (abs_qty * cost_per_unit)
-            
             if holding['quantity'] == abs_qty:
                 self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
             else:
@@ -86,6 +77,19 @@ class DatabaseRepo:
 
     def update_market_price(self, symbol, new_price):
         self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
+
+    def update_other_asset(self, symbol, current_val):
+        """Hàm thần thánh mua Vàng/BĐS tự trích vốn"""
+        symbol = symbol.upper()
+        wallet_cash = self.execute_query("SELECT balance FROM wallets WHERE id = 'CASH'", fetch_one=True)
+        if wallet_cash and wallet_cash['balance'] >= current_val:
+            self.transfer_funds('CASH', 'OTHER', current_val)
+        else:
+            diff = current_val - (wallet_cash['balance'] if wallet_cash else 0)
+            self.update_cash_balance(diff, 'NAP')
+            self.transfer_funds('CASH', 'OTHER', current_val)
+        self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
+        self.execute_query("INSERT OR REPLACE INTO holdings (wallet_id, symbol, quantity, average_price, current_price, cost_basis_vnd) VALUES ('OTHER', ?, 1, ?, ?, ?)", (symbol, current_val, current_val, current_val))
 
     def get_dashboard_data(self):
         return {
