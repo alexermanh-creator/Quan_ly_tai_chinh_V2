@@ -12,22 +12,17 @@ class StockModule:
             w = next((x for x in data['wallets'] if x['id'] == 'STOCK'), {'total_in':0, 'total_out':0, 'balance':0})
             holdings = [h for h in data['holdings'] if h['wallet_id'] == 'STOCK']
             
-            # Tính toán tài sản hiện tại
             gt_thi_truong = sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in holdings)
             nav = w['balance'] + gt_thi_truong
             von_rong = w['total_in'] - w['total_out']
-            
-            # Lãi chốt + Lãi tạm tính
             real_pl = data['realized'].get('STOCK', 0)
             float_pl = gt_thi_truong - sum(h['quantity'] * h['average_price'] for h in holdings)
             pl_tong = real_pl + float_pl
 
-            # Logic mã tốt/kém & Tỉ trọng
             best_info, worst_info, max_sym, max_pct = "--", "--", "--", 0
             perf_list = []
             perf_map = {p['symbol']: {'pl': p['realized'], 'inv': p['total_invested']} for p in data['perf_symbols']}
             
-            # Gộp lãi tạm tính vào perf_map để tính ROI thực tế
             for h in holdings:
                 f_pl = h['quantity'] * ((h['current_price'] or h['average_price']) - h['average_price'])
                 if h['symbol'] in perf_map: perf_map[h['symbol']]['pl'] += f_pl
@@ -77,7 +72,92 @@ class StockModule:
                         f"• Lãi: {format_currency(h['quantity']*(p_now-h['average_price']))} ({format_percent(roi)})",
                         draw_line("thin")
                     ]
-            
             lines.append(draw_line("thick"))
             return "\n".join(lines)
         except Exception as e: return f"❌ Lỗi Stock: {str(e)}"
+
+    def get_group_report(self):
+        try:
+            data = self.db.get_dashboard_data()
+            w = next((x for x in data['wallets'] if x['id'] == 'STOCK'), {'total_in':0, 'total_out':0, 'balance':0})
+            holdings = [h for h in data['holdings'] if h['wallet_id'] == 'STOCK']
+            
+            # Tính toán Master
+            gt_thi_truong = sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in holdings)
+            nav = w['balance'] + gt_thi_truong
+            von_rong = w['total_in'] - w['total_out']
+            real_pl = data['realized'].get('STOCK', 0)
+            float_pl = gt_thi_truong - sum(h['quantity'] * h['average_price'] for h in holdings)
+            pl_tong = real_pl + float_pl
+
+            # Xử lý Top Đóng Góp/Kéo Lùi
+            perf_symbols = data.get('perf_symbols', [])
+            win_list = sorted([p for p in perf_symbols if p['realized'] > 0], key=lambda x: x['realized'], reverse=True)
+            loss_list = sorted([p for p in perf_symbols if p['realized'] < 0], key=lambda x: x['realized'])
+
+            # Tính Tổng Mua/Bán (Truy vấn từ transactions)
+            all_tx = self.db.execute_query("SELECT type, amount FROM transactions WHERE wallet_id = 'STOCK'", fetch_all=True)
+            total_buy = abs(sum(t['amount'] for t in all_tx if t['type'] == 'MUA'))
+            total_sell = sum(t['amount'] for t in all_tx if t['type'] == 'BAN')
+
+            # Tỉ trọng lớn nhất
+            max_sym, max_pct = "--", 0
+            best_info, worst_info = "--", "--"
+            if holdings:
+                max_h = max(holdings, key=lambda x: x['quantity'] * (x['current_price'] or x['average_price']))
+                max_sym = max_h['symbol']
+                max_pct = (max_h['quantity'] * (max_h['current_price'] or max_h['average_price']) / nav * 100) if nav > 0 else 0
+                
+                # ROI cho tốt nhất/kém nhất trong danh mục hiện tại
+                h_perf = []
+                for h in holdings:
+                    roi = (((h['current_price'] or h['average_price']) / h['average_price']) - 1) * 100
+                    h_perf.append({'s': h['symbol'], 'r': roi})
+                b_h = max(h_perf, key=lambda x: x['r'])
+                w_h = min(h_perf, key=lambda x: x['r'])
+                best_info = f"{b_h['s']} ({format_percent(b_h['r'])})"
+                worst_info = f"{w_h['s']} ({format_percent(w_h['r'])})"
+
+            lines = [
+                "📑 BÁO CÁO TÀI CHÍNH: CHỨNG KHOÁN", draw_line("thick"),
+                "📊 DANH MỤC CỔ PHIẾU",
+                f"💰 Tổng giá trị: {format_currency(nav)}",
+                f"💵 Tổng vốn: {format_currency(von_rong)}",
+                f"💸 Sức mua: {format_currency(w['balance'])}",
+                f"📈 Lãi/Lỗ: {format_currency(pl_tong)} ({format_percent(pl_tong/von_rong*100 if von_rong>0 else 0)})",
+                f"⬆️ Tổng nạp ví: {format_currency(w['total_in'])}",
+                f"⬇️ Tổng rút ví: {format_currency(w['total_out'])}",
+                f"🏆 Mã tốt nhất: {best_info}",
+                f"📉 Mã kém nhất: {worst_info}",
+                f"📊 Tỉ trọng lớn nhất: {max_sym} ({max_pct:.1f}%)",
+                draw_line("thin"),
+                "🔄 HOẠT ĐỘNG GIAO DỊCH:",
+                f"🛒 Tổng mua: {format_currency(total_buy)}",
+                f"💰 Tổng bán: {format_currency(total_sell)}",
+                "",
+                "🏆 Top Đóng Góp (Lãi chốt):"
+            ]
+
+            if win_list:
+                for i, p in enumerate(win_list[:3], 1):
+                    lines.append(f"{i}. {p['symbol']}: +{format_currency(p['realized'])}")
+            else:
+                lines.append("• Chưa có dữ liệu lãi.")
+
+            lines.append("⚠️ Top Kéo Lùi (Lỗ chốt):")
+            if loss_list:
+                for p in loss_list[:3]:
+                    lines.append(f"• {p['symbol']}: {format_currency(p['realized'])}")
+            else:
+                lines.append("• Chưa có dữ liệu lỗ.")
+
+            lines += [draw_line("thin"), "📊 CHI TIẾT DANH MỤC HIỆN TẠI:"]
+            if not holdings:
+                lines.append("• Trống")
+            else:
+                for h in holdings:
+                    roi = (((h['current_price'] or h['average_price']) / h['average_price']) - 1) * 100
+                    lines.append(f"• {h['symbol']}: ROI {format_percent(roi)} | GT: {format_currency(h['quantity']*(h['current_price'] or h['average_price']))}")
+
+            return "\n".join(lines)
+        except Exception as e: return f"❌ Lỗi Báo cáo: {str(e)}"
