@@ -17,6 +17,8 @@ class DatabaseRepo:
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO'), ('OTHER')")
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%')")
+            # Thiết lập tỷ giá mặc định cho Crypto nếu chưa có
+            cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('crypto_rate', '25000')")
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
             except: pass
             conn.commit()
@@ -75,27 +77,21 @@ class DatabaseRepo:
         wallet_other = self.execute_query("SELECT (total_in - total_out) as net_inv FROM wallets WHERE id = 'OTHER'", fetch_one=True)
         
         if wallet_other and wallet_other['net_inv'] > 0:
-            # Nếu ví OTHER đã được cấp vốn, dùng số đó làm vốn gốc
             cost = wallet_other['net_inv']
             self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
         else:
-            # Nếu ví OTHER chưa có vốn, kiểm tra ví Mẹ (CASH)
             wallet_cash = self.execute_query("SELECT balance FROM wallets WHERE id = 'CASH'", fetch_one=True)
             if wallet_cash and wallet_cash['balance'] >= current_val:
-                # Trích vốn trực tiếp từ ví Mẹ
                 cost = current_val
                 self.transfer_funds('CASH', 'OTHER', current_val)
                 self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
             else:
-                # Nếu cả hai không đủ tiền, coi như đây là tài sản nạp thêm từ ngoài vào
                 cost = current_val
-                # Tự động tạo lệnh nạp và chuyển để giữ log dòng tiền sạch
                 self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (current_val, current_val))
                 self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', 'NAP', ?)", (current_val,))
                 self.transfer_funds('CASH', 'OTHER', current_val)
                 self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
 
-        # 2. Ghi nhận tài sản với Giá vốn đã được xác thực
         self.execute_query("""
             INSERT OR REPLACE INTO holdings (wallet_id, symbol, quantity, average_price, current_price) 
             VALUES ('OTHER', ?, 1, ?, ?)
@@ -136,5 +132,12 @@ class DatabaseRepo:
         holdings = self.execute_query("SELECT * FROM holdings", fetch_all=True)
         realized_rows = self.execute_query("SELECT wallet_id, SUM(realized_pl) as total FROM transactions GROUP BY wallet_id", fetch_all=True)
         realized_map = {r['wallet_id']: (r['total'] or 0) for r in realized_rows}
-        perf_symbols = self.execute_query("SELECT symbol, SUM(realized_pl) as realized, SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested FROM transactions WHERE wallet_id = 'STOCK' AND symbol IS NOT NULL GROUP BY symbol", fetch_all=True)
+        # Sửa ở đây: Bỏ cứng 'STOCK', lấy lịch sử trade cho mọi ví để tái sử dụng ở nhiều Module
+        perf_symbols = self.execute_query("""
+            SELECT wallet_id, symbol, SUM(realized_pl) as realized, 
+                   SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested 
+            FROM transactions 
+            WHERE symbol IS NOT NULL 
+            GROUP BY wallet_id, symbol
+        """, fetch_all=True)
         return {"wallets": wallets, "holdings": holdings, "realized": realized_map, "perf_symbols": perf_symbols, "goal": self.get_goal()}
