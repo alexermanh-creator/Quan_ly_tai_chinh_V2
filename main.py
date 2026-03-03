@@ -11,7 +11,7 @@ from backend.modules.wallet import WalletModule
 from backend.modules.crypto import CryptoModule
 from backend.core.parser import parse_currency, parse_trade_command
 
-db = DatabaseRepo()
+db = DatabaseRepo())
 dash = DashboardModule()
 stock_mod = StockModule()
 crypto_mod = CryptoModule()
@@ -90,3 +90,4 @@ def handle_manual_commands(message):
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
+
