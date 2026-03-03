@@ -125,7 +125,7 @@ def handle_manual_commands(message):
             if not parsed: return
             w_type, sym, qty, price = parsed
             
-            # SỬA LỖI MỆNH GIÁ: Nếu là Stock và Sếp gõ giá < 1000, tự nhân 1000
+            # SỬA LỖI MỆNH GIÁ: Nếu là Stock và giá < 1000, tự nhân 1000 (áp dụng cho cả mua và bán)
             if w_type == 'STOCK' and price < 1000:
                 price = price * 1000
 
@@ -139,7 +139,7 @@ def handle_manual_commands(message):
             total_vnd = abs(qty) * price * rate
             res = db.execute_trade(w_type, sym, qty, price, total_vnd)
             
-            msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {abs(qty)} {sym}"
+            msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {abs(qty):,.0f} {sym}"
             if w_type == 'CRYPTO': msg += f" (Tỷ giá: {rate:,.0f}đ)"
             if qty < 0: msg += f"\n💰 Lãi chốt: {res:,.0f} đ"
             bot.reply_to(message, msg)
