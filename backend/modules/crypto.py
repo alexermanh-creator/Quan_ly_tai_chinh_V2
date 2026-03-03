@@ -12,26 +12,31 @@ class CryptoModule:
             w = next((x for x in data['wallets'] if x['id'] == 'CRYPTO'), {'total_in':0, 'total_out':0, 'balance':0})
             holdings = [h for h in data['holdings'] if h['wallet_id'] == 'CRYPTO']
             
-            # Lấy tỷ giá từ Database (hoặc mặc định 25000)
             rate_row = self.db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
             rate = float(rate_row['value']) if rate_row else 25000.0
 
-            # Tính toán tài sản (Quy về VNĐ trước)
+            # 1. Tính toán giá trị bằng VNĐ (Sức mua w['balance'] đã là VNĐ)
             gt_thi_truong_vnd = sum(h['quantity'] * (h['current_price'] or h['average_price']) * rate for h in holdings)
-            nav_vnd = (w['balance'] * rate if w['balance'] > 0 else 0) + gt_thi_truong_vnd
+            nav_vnd = w['balance'] + gt_thi_truong_vnd
             von_rong_vnd = w['total_in'] - w['total_out']
-            real_pl = data['realized'].get('CRYPTO', 0)
-            float_pl = gt_thi_truong_vnd - sum(h['quantity'] * h['average_price'] * rate for h in holdings)
-            pl_tong = real_pl + float_pl
+            
+            # Lãi Lỗ tính theo VNĐ
+            real_pl_vnd = data['realized'].get('CRYPTO', 0)
+            float_pl_vnd = gt_thi_truong_vnd - sum(h['quantity'] * h['average_price'] * rate for h in holdings)
+            pl_tong_vnd = real_pl_vnd + float_pl_vnd
 
-            # Đổi sang USD để hiển thị
+            # 2. Quy đổi sang USD để hiển thị thêm
             nav_usd = nav_vnd / rate if rate > 0 else 0
             von_rong_usd = von_rong_vnd / rate if rate > 0 else 0
-            balance_usd = w['balance']
+            balance_usd = w['balance'] / rate if rate > 0 else 0 # Chia tỷ giá để ra USDT
 
+            # 3. Lọc mã tốt/kém (Chỉ lấy mã của ví CRYPTO)
             best_info, worst_info, max_sym, max_pct = "--", "--", "--", 0
             perf_list = []
-            perf_map = {p['symbol']: {'pl': p['realized'], 'inv': p['total_invested']} for p in data['perf_symbols']}
+            
+            # Lọc chỉ lấy perf_symbols của CRYPTO
+            perf_map = {p['symbol']: {'pl': p['realized'], 'inv': p['total_invested']} 
+                        for p in data['perf_symbols'] if p['wallet_id'] == 'CRYPTO'}
             
             for h in holdings:
                 f_pl = h['quantity'] * ((h['current_price'] or h['average_price']) - h['average_price']) * rate
@@ -59,8 +64,8 @@ class CryptoModule:
                 f"🪙 DANH MỤC TIỀN ĐIỆN TỬ (Rate: {rate:,.0f}đ)", draw_line("thick"),
                 f"💰 Tổng giá trị: {format_currency(nav_vnd)} (~{nav_usd:,.0f} USDT)",
                 f"🏦 Tổng vốn: {format_currency(von_rong_vnd)} (~{von_rong_usd:,.0f} USDT)",
-                f"💸 Sức mua: {format_currency(w['balance'] * rate)} (~{balance_usd:,.0f} USDT)",
-                f"📈 Lãi/Lỗ: {format_currency(pl_tong)} ({format_percent(pl_tong/von_rong_vnd*100 if von_rong_vnd>0 else 0)})",
+                f"💸 Sức mua: {format_currency(w['balance'])} (~{balance_usd:,.0f} USDT)",
+                f"📈 Lãi/Lỗ: {format_currency(pl_tong_vnd)} ({format_percent(pl_tong_vnd/von_rong_vnd*100 if von_rong_vnd>0 else 0)})",
                 f"⬆️ Tổng nạp ví: {format_currency(w['total_in'])}",
                 f"⬇️ Tổng rút ví: {format_currency(w['total_out'])}",
                 f"🏆 Mã tốt nhất: {best_info}",
@@ -97,13 +102,14 @@ class CryptoModule:
             rate = float(rate_row['value']) if rate_row else 25000.0
 
             gt_thi_truong_vnd = sum(h['quantity'] * (h['current_price'] or h['average_price']) * rate for h in holdings)
-            nav = (w['balance'] * rate) + gt_thi_truong_vnd
+            nav = w['balance'] + gt_thi_truong_vnd # Đã sửa bỏ nhân rate
             von_rong = w['total_in'] - w['total_out']
             real_pl = data['realized'].get('CRYPTO', 0)
             float_pl = gt_thi_truong_vnd - sum(h['quantity'] * h['average_price'] * rate for h in holdings)
             pl_tong = real_pl + float_pl
 
-            perf_symbols = data.get('perf_symbols', [])
+            # Lọc chỉ lấy lịch sử của CRYPTO
+            perf_symbols = [p for p in data.get('perf_symbols', []) if p['wallet_id'] == 'CRYPTO']
             win_list = sorted([p for p in perf_symbols if p['realized'] > 0], key=lambda x: x['realized'], reverse=True)
             loss_list = sorted([p for p in perf_symbols if p['realized'] < 0], key=lambda x: x['realized'])
 
@@ -132,7 +138,7 @@ class CryptoModule:
                 "📊 DANH MỤC COIN",
                 f"💰 Tổng giá trị: {format_currency(nav)}",
                 f"💵 Tổng vốn: {format_currency(von_rong)}",
-                f"💸 Sức mua (VNĐ): {format_currency(w['balance']*rate)}",
+                f"💸 Sức mua (VNĐ): {format_currency(w['balance'])}",
                 f"📈 Lãi/Lỗ: {format_currency(pl_tong)} ({format_percent(pl_tong/von_rong*100 if von_rong>0 else 0)})",
                 f"⬆️ Tổng nạp ví: {format_currency(w['total_in'])}",
                 f"⬇️ Tổng rút ví: {format_currency(w['total_out'])}",
