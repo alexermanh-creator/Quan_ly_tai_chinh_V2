@@ -3,18 +3,19 @@ import sys, os, time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from backend.telegram.bot_client import bot
-from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard
+from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard, get_crypto_keyboard
 from backend.database.repository import DatabaseRepo
 from backend.modules.dashboard import DashboardModule
 from backend.modules.stock import StockModule
 from backend.modules.wallet import WalletModule
+from backend.modules.crypto import CryptoModule
 from backend.core.parser import parse_currency, parse_trade_command
-from config import RATE_STOCK, RATE_CRYPTO
 
 # Khởi tạo các Module hạt nhân
 db = DatabaseRepo()
 dash = DashboardModule()
 stock_mod = StockModule()
+crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
 
 # --- 1. HANDLER MENU CHÍNH (HOME) ---
@@ -29,7 +30,8 @@ def show_stock(message):
 
 @bot.message_handler(func=lambda message: message.text in ["🪙 Crypto", "🟡 Crypto"])
 def show_crypto(message):
-    bot.reply_to(message, "🟡 **MODULE CRYPTO V2.0**\n\nTính năng quy đổi tự động (Rate 25k) đang được nạp dữ liệu. Sếp có thể dùng lệnh `c [MÃ] [SL] [GIÁ]` để giao dịch ngay!")
+    # Thay vì get_crypto_keyboard, tạm dùng get_stock_keyboard vì layout phím giống nhau
+    bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_stock_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "🥇 Tài sản khác")
 def show_other_assets(message):
@@ -37,110 +39,116 @@ def show_other_assets(message):
 
 @bot.message_handler(func=lambda message: message.text == "📜 Lịch sử")
 def show_history(message):
-    bot.reply_to(message, "📜 Tính năng truy xuất 10 giao dịch gần nhất đang được tối ưu. Sếp chờ em chút nhé!")
+    bot.reply_to(message, "📜 Tính năng truy xuất 10 giao dịch gần nhất đang được tối ưu.")
 
 @bot.message_handler(func=lambda message: message.text == "🤖 AI Chat")
 def ai_chat(message):
-    bot.reply_to(message, "🤖 Chào Sếp, tôi là Gemini. Sếp muốn tôi phân tích danh mục hay dự báo dòng tiền cho mã nào?")
+    bot.reply_to(message, "🤖 Chào Sếp, tôi là Gemini. Sếp muốn tôi phân tích danh mục nào?")
 
 @bot.message_handler(func=lambda message: message.text in ["📊 Báo cáo", "⚙️ Cài đặt", "📥 EXPORT/IMPORT"])
 def coming_soon(message):
-    bot.reply_to(message, f"🛠️ Tính năng **{message.text}** đang được hoàn thiện trong bản cập nhật tới!")
+    bot.reply_to(message, f"🛠️ Tính năng **{message.text}** đang được hoàn thiện!")
 
-# --- 2. HANDLER MENU PHỤ (STOCK) ---
+# --- 2. HANDLER MENU PHỤ (STOCK / CRYPTO) ---
 
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
-def stock_trade_ins(message):
-    msg = "➕ **LỆNH GIAO DỊCH CHỨNG KHOÁN**\n\nCú pháp: `s [MÃ] [SL] [GIÁ]`\n👉 Ví dụ: `s HPG 1000 28.5` (Mua)\n👉 Ví dụ: `s HPG -1000 30` (Bán)"
+def trade_ins(message):
+    msg = "➕ **LỆNH GIAO DỊCH**\n\nStock: `s [MÃ] [SL] [GIÁ VNĐ]`\nCrypto: `c [MÃ] [SL] [GIÁ USD]`\n👉 Ví dụ: `c BTC 0.5 65000`"
     bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
-def stock_refresh_ins(message):
-    msg = "🔄 **CẬP NHẬT GIÁ NHANH**\n\nCú pháp: `up [MÃ] [GIÁ]`\n👉 Ví dụ: `up FPT 120`"
+def refresh_ins(message):
+    msg = "🔄 **CẬP NHẬT GIÁ NHANH**\n\nCú pháp: `up [MÃ] [GIÁ]`\n👉 Ví dụ: `up BTC 68000`"
     bot.send_message(message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def show_stock_report(message):
-    # Gọi hàm get_group_report vừa tạo ở StockModule
+def show_report(message):
+    # Gửi cả báo cáo Stock và Crypto để Sếp soi
     bot.send_message(message.chat.id, stock_mod.get_group_report())
+    time.sleep(1)
+    bot.send_message(message.chat.id, crypto_mod.get_group_report())
 
-# --- 3. HANDLER LỆNH ĐẶT MỤC TIÊU ---
+# --- 3. HANDLER SETTINGS & TỔNG HỢP ---
 
-@bot.message_handler(func=lambda message: message.text.lower().startswith('set goal '))
-def handle_set_goal(message):
-    goal_str = message.text.lower().replace('set goal ', '').strip()
-    db.set_goal(goal_str)
-    bot.reply_to(message, f"🎯 Đã thiết lập mục tiêu: **{goal_str}**\nBấm [🏠 Trang chủ] để xem tiến độ.")
-
-# --- 4. HANDLER TỔNG HỢP LỆNH GÕ TAY (INTEGRATED) ---
-
-@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ']))
+@bot.message_handler(func=lambda message: text_starts_with(message.text.lower(), ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'set goal ', 'rate ']))
 def handle_manual_commands(message):
-    text = message.text.lower()
+    text = message.text.lower().strip()
     
-    # Nhóm 1: Ví con & Ví Mẹ
-    if text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
-        if "other" in text: # Ép logic cho ví OTHER
-            try:
-                amount_text = text.replace('chuyen other', '').strip()
-                val = parse_currency(amount_text)
+    try:
+        # Cập nhật Tỷ giá Crypto
+        if text.startswith('rate crypto '):
+            rate_val = text.replace('rate crypto ', '').strip()
+            db.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('crypto_rate', ?)", (rate_val,))
+            bot.reply_to(message, f"✅ Đã cập nhật tỷ giá Crypto: 1 USD = {float(rate_val):,.0f} VNĐ")
+
+        # Thiết lập mục tiêu
+        elif text.startswith('set goal '):
+            goal = text.replace('set goal ', '').strip()
+            db.set_goal(goal)
+            bot.reply_to(message, f"🎯 Đã thiết lập mục tiêu: **{goal}**")
+
+        # Luân chuyển tiền (CASH, STOCK, CRYPTO, OTHER)
+        elif text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
+            if "other" in text and "chuyen" in text:
+                val = parse_currency(text.replace('chuyen other', '').strip())
                 db.transfer_funds('CASH', 'OTHER', val)
                 bot.reply_to(message, f"✅ Đã cấp vốn {val:,.0f} đ cho Ví OTHER.")
-            except: bot.reply_to(message, "❌ Lỗi: `chuyen other 500tr`")
-        else:
-            bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
+            else:
+                bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
 
-    # Nhóm 2: Tài sản khác (k)
-    elif text.startswith('k '):
-        try:
+        # Ghi nhận tài sản khác
+        elif text.startswith('k '):
             parts = text.split()
-            if len(parts) < 3: raise ValueError
             name, val = parts[1].upper(), parse_currency(" ".join(parts[2:]))
             db.update_other_asset(name, val)
             bot.reply_to(message, f"✅ Ghi nhận tài sản {name}: {val:,.0f} đ")
-        except: bot.reply_to(message, "❌ Cú pháp: `k [TÊN] [GIÁ]`\nVD: `k VANG 85tr`")
 
-    # Nhóm 3: Cập nhật giá (up)
-    elif text.startswith('up '):
-        try:
+        # Cập nhật giá
+        elif text.startswith('up '):
             parts = text.split()
-            if len(parts) < 3: raise ValueError
             sym, price = parts[1].upper(), float(parts[2])
-            # Tự hiểu 120 là 120k
-            real_p = price * 1000 if price < 1000 else price
+            real_p = price * 1000 if (price < 1000 and sym not in ['BTC', 'ETH', 'SOL', 'BNB']) else price
             db.update_market_price(sym, real_p)
-            bot.reply_to(message, f"✅ {sym} = {real_p/1000:,.1f}k")
-        except: bot.reply_to(message, "❌ Lỗi: `up FPT 120`")
+            bot.reply_to(message, f"✅ Cập nhật {sym} = {real_p:,.2f}")
 
-    # Nhóm 4: Giao dịch (s/c)
-    else:
-        parsed = parse_trade_command(text)
-        if not parsed: return
-        w_type, sym, qty, price = parsed
-        rate = RATE_STOCK if w_type == 'STOCK' else RATE_CRYPTO
-        try:
-            res = db.execute_trade(w_type, sym, qty, price * rate, abs(qty) * price * rate)
-            msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {abs(qty):,.0f} {sym}"
+        # Giao dịch (S / C)
+        elif text.startswith(('s ', 'c ')):
+            parsed = parse_trade_command(text)
+            if not parsed: return
+            w_type, sym, qty, price = parsed
+            
+            # Lấy tỷ giá nếu là lệnh Crypto
+            rate = 1
+            if w_type == 'CRYPTO':
+                rate_row = db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
+                rate = float(rate_row['value']) if rate_row else 25000.0
+
+            # Tính toán tiền tệ
+            total_vnd = abs(qty) * price * rate
+            res = db.execute_trade(w_type, sym, qty, price, total_vnd)
+            
+            msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {abs(qty)} {sym}"
+            if w_type == 'CRYPTO': msg += f" (Tỷ giá: {rate:,.0f}đ)"
             if qty < 0: msg += f"\n💰 Lãi chốt: {res:,.0f} đ"
             bot.reply_to(message, msg)
-        except Exception as e: bot.reply_to(message, f"❌ {str(e)}")
 
-# --- 5. GỢI Ý THÔNG MINH (CATCH-ALL) ---
+    except Exception as e:
+        bot.reply_to(message, f"❌ Lỗi: {str(e)}")
+
+def text_starts_with(text, prefixes):
+    return any(text.startswith(x) for x in prefixes)
 
 @bot.message_handler(func=lambda message: True)
 def handle_smart_hints(message):
     parts = message.text.split()
     if len(parts) >= 3 and parts[1].replace('.','',1).isdigit():
-        bot.reply_to(message, "💡 Sếp quên gõ lệnh `s`, `c` hoặc `k` rồi!\nVD: `s HPG 1000 28.5` hoặc `k VANG 85tr`.")
-
-# --- 6. KHỞI CHẠY VÀ HỒI SINH TỰ ĐỘNG ---
+        bot.reply_to(message, "💡 Sếp quên gõ lệnh `s`, `c` hoặc `k` rồi!")
 
 if __name__ == "__main__":
-    print("🚀 Hệ điều hành Tài chính V2.6 đang trực chiến...")
+    print("🚀 Hệ điều hành Tài chính V3.0 (Multi-Asset) đang trực chiến...")
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception as e:
             print(f"⚠️ Lỗi kết nối Telegram: {e}")
             time.sleep(5)
-
