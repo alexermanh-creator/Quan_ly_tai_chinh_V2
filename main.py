@@ -61,7 +61,8 @@ def stock_refresh_ins(message):
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def show_stock_report(message):
-    bot.send_message(message.chat.id, "📈 Đang trích xuất báo cáo hiệu suất nhóm... (Tính năng này đang tải dữ liệu)")
+    # Gọi hàm get_group_report vừa tạo ở StockModule
+    bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 # --- 3. HANDLER LỆNH ĐẶT MỤC TIÊU ---
 
@@ -142,3 +143,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Lỗi kết nối Telegram: {e}")
             time.sleep(5)
+
