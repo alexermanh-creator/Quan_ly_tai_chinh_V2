@@ -17,8 +17,8 @@ class DashboardModule:
             rate_row = self.db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
             crypto_rate = float(rate_row['value']) if rate_row else 25000.0
             
-            total_in = sum(w['total_in'] for w in wallets.values())
-            total_out = sum(w['total_out'] for w in wallets.values())
+            total_in = wallets.get('CASH', {}).get('total_in', 0)
+            total_out = wallets.get('CASH', {}).get('total_out', 0)
             net_invested = total_in - total_out
             cash_balance = wallets.get('CASH', {}).get('balance', 0)
 
@@ -109,3 +109,4 @@ class DashboardModule:
 
             return "\n".join(lines)
         except Exception as e: return f"❌ Lỗi Dashboard: {str(e)}"
+
