@@ -7,87 +7,105 @@ class DashboardModule:
         self.db = DatabaseRepo()
 
     def get_main_dashboard(self):
-        data = self.db.get_dashboard_data()
-        wallets = {w['id']: w for w in data['wallets']}
-        holdings = data['holdings']
-        
-        # 1. Hàm tính thông số cho từng Module con
-        def get_mod_stats(mod_id):
-            w = wallets.get(mod_id, {'total_in':0, 'total_out':0, 'balance':0})
-            h_list = [h for h in holdings if h['wallet_id'] == mod_id]
-            # Tài sản = Tiền mặt dư trong ví + Giá trị thị trường hiện tại của danh mục
-            asset = w['balance'] + sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in h_list)
-            net_inv = w['total_in'] - w['total_out']
-            pl = asset - net_inv
-            roi = (pl/net_inv*100 if net_inv != 0 else 0)
-            return asset, w['total_in'], w['total_out'], pl, roi
-
-        s_asset, s_in, s_out, s_pl, s_roi = get_mod_stats('STOCK')
-        c_asset, c_in, c_out, c_pl, c_roi = get_mod_stats('CRYPTO')
-        k_asset, k_in, k_out, k_pl, k_roi = get_mod_stats('OTHER')
-
-        # 2. Tính toán tầng Master (Toàn cục)
-        cash_mẹ = wallets['CASH']['balance']
-        total_asset = s_asset + c_asset + k_asset + cash_mẹ
-        
-        # Vốn thực ròng = Tổng nạp ví mẹ - Tổng rút ví mẹ
-        total_in = wallets['CASH']['total_in']
-        total_out = wallets['CASH']['total_out']
-        net_capital = total_in - total_out
-        
-        # Lãi/Lỗ tổng dựa trên chênh lệch Tài sản và Vốn thực ròng
-        total_pl = total_asset - net_capital
-        total_roi = (total_pl / net_capital * 100) if net_capital > 0 else 0
-
-        # 3. Xử lý Mục tiêu (Goal Tracking)
-        goal_str = data['goal']
-        goal_val = 0
         try:
-            if "hoa von" in goal_str: 
-                goal_val = 0
-            elif "%" in goal_str:
-                pct = float(goal_str.replace("lai","").replace("lo","").replace("%","").strip())
-                goal_val = net_capital * (pct/100)
-            else:
-                raw_str = goal_str.replace("lai","").replace("lo","").replace("tr","000000").replace("ty","000000000").strip()
-                goal_val = float(raw_str)
-        except: 
-            goal_val = net_capital * 0.1 # Mặc định 10%
+            data = self.db.get_dashboard_data()
+            wallets = {w['id']: w for w in data['wallets']}
+            holdings = data['holdings']
+            realized_pl = data['realized']
+            
+            # Lấy tỷ giá Crypto từ Database
+            rate_row = self.db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
+            crypto_rate = float(rate_row['value']) if rate_row else 25000.0
+            
+            total_in = sum(w['total_in'] for w in wallets.values())
+            total_out = sum(w['total_out'] for w in wallets.values())
+            net_invested = total_in - total_out
+            cash_balance = wallets.get('CASH', {}).get('balance', 0)
 
-        # Tính toán tiến độ mục tiêu
-        if goal_val == 0: # Trường hợp hòa vốn
-            progress = 100.0 if total_pl >= 0 else (total_pl / 1000000) # Hiện số âm nếu chưa về bờ
-        else:
-            progress = (total_pl / goal_val * 100)
-        
-        lines = [
-            "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0", draw_line("thick"),
-            f"💰 Tổng tài sản: {format_currency(total_asset)}",
-            f"📤 Tổng nạp: {format_currency(total_in)}",
-            f"📥 Tổng rút: {format_currency(total_out)}",
-            f"💵 Cash còn lại: {format_currency(cash_mẹ)}",
-            f"📈 Lãi/Lỗ tổng: {format_currency(total_pl)} ({format_percent(total_roi)})",
-            f"🎯 Mục tiêu: {goal_str} ({progress:.1f}% - {format_currency(total_pl)}/{format_currency(goal_val)})",
-            draw_line("thin"),
-            "📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):",
-            f"📈 Stock: {format_currency(s_in - s_out)}",
-            f"🟡 Crypto: {format_currency(c_in - c_out)}",
-            f"🥇 Khác: {format_currency(k_in - k_out)}",
-            draw_line("thick"),
-            "📈 STOCK",
-            f"💰 Tài sản: {format_currency(s_asset)}",
-            f"📤 Nạp: {format_currency(s_in)} | 📥 Rút: {format_currency(s_out)}",
-            f"📈 Lãi/Lỗ: {format_currency(s_pl)} ({format_percent(s_roi)})",
-            draw_line("thin"),
-            "🟡 CRYPTO",
-            f"💰 Tài sản: {format_currency(c_asset)}",
-            f"📤 Nạp: {format_currency(c_in)} | 📥 Rút: {format_currency(c_out)}",
-            f"📈 Lãi/Lỗ: {format_currency(c_pl)} ({format_percent(c_roi)})",
-            draw_line("thin"),
-            "🥇 TÀI SẢN KHÁC",
-            f"💰 Tài sản: {format_currency(k_asset)}",
-            f"📤 Nạp: {format_currency(k_in)} | 📥 Rút: {format_currency(k_out)}",
-            f"📈 Lãi/Lỗ: {format_currency(k_pl)} ({format_percent(k_roi)})",
-            draw_line("thick")
-        ]
-        return "\n".join(lines)
+            # Tính GT tài sản theo từng ví (Có xử lý Tỷ giá riêng cho Crypto)
+            w_assets = {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0}
+            w_pl = {'STOCK': 0, 'CRYPTO': 0, 'OTHER': 0}
+            
+            for wid in w_assets.keys():
+                w_balance = wallets.get(wid, {}).get('balance', 0)
+                h_list = [h for h in holdings if h['wallet_id'] == wid]
+                
+                gt_thi_truong = 0
+                tong_von_mua = 0
+                
+                # Logic tính toán Market Value
+                for h in h_list:
+                    p_now = h['current_price'] or h['average_price']
+                    if wid == 'CRYPTO':
+                        gt_thi_truong += (h['quantity'] * p_now * crypto_rate)
+                        tong_von_mua += (h['quantity'] * h['average_price'] * crypto_rate)
+                    else:
+                        gt_thi_truong += (h['quantity'] * p_now)
+                        tong_von_mua += (h['quantity'] * h['average_price'])
+
+                # Tài sản = Tiền mặt dư trong ví + Giá trị thị trường
+                w_assets[wid] = w_balance + gt_thi_truong
+                
+                # Tính Lãi/Lỗ: Lãi chốt + Lãi tạm tính
+                r_pl = realized_pl.get(wid, 0)
+                float_pl = gt_thi_truong - tong_von_mua
+                w_pl[wid] = r_pl + float_pl
+
+            total_assets = cash_balance + sum(w_assets.values())
+            total_pl = sum(w_pl.values())
+            pl_pct = (total_pl / net_invested * 100) if net_invested > 0 else 0
+
+            # Xử lý Goal
+            goal_str = data.get('goal', 'lai 10%')
+            goal_target = 0
+            goal_pct = 0
+            if goal_str.startswith('lai '):
+                val = goal_str.replace('lai ', '').strip()
+                if '%' in val:
+                    goal_target = net_invested * float(val.replace('%','')) / 100
+                else:
+                    mult = 1_000_000_000 if 'ty' in val else (1_000_000 if 'tr' in val else 1)
+                    num_str = val.replace('ty','').replace('trieu','').replace('tr','').strip()
+                    try: goal_target = float(num_str) * mult
+                    except: pass
+                if goal_target > 0: goal_pct = (total_pl / goal_target) * 100
+            elif goal_str == 'hoa von':
+                goal_target = 0
+                goal_pct = 100 if total_pl >= 0 else 0
+
+            # Cấu trúc hiển thị
+            lines = [
+                "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V3.0", draw_line("thick"),
+                f"💰 Tổng tài sản: {format_currency(total_assets)}",
+                f"📤 Tổng nạp: {format_currency(total_in)}",
+                f"📥 Tổng rút: {format_currency(total_out)}",
+                f"💵 Cash còn lại: {format_currency(cash_balance)}",
+                f"📈 Lãi/Lỗ tổng: {format_currency(total_pl)} ({format_percent(pl_pct)})",
+                f"🎯 Mục tiêu: {goal_str} ({goal_pct:.1f}% - {format_currency(total_pl)}/{format_currency(goal_target)})",
+                draw_line("thin"),
+                "📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):",
+                f"📈 Stock: {format_currency(wallets.get('STOCK',{}).get('total_in',0) - wallets.get('STOCK',{}).get('total_out',0))}",
+                f"🟡 Crypto: {format_currency(wallets.get('CRYPTO',{}).get('total_in',0) - wallets.get('CRYPTO',{}).get('total_out',0))}",
+                f"🥇 Khác: {format_currency(wallets.get('OTHER',{}).get('total_in',0) - wallets.get('OTHER',{}).get('total_out',0))}",
+                draw_line("thick")
+            ]
+
+            # Chi tiết từng ví
+            icons = {'STOCK': '📈', 'CRYPTO': '🟡', 'OTHER': '🥇'}
+            names = {'STOCK': 'STOCK', 'CRYPTO': 'CRYPTO', 'OTHER': 'TÀI SẢN KHÁC'}
+            
+            for wid in ['STOCK', 'CRYPTO', 'OTHER']:
+                w = wallets.get(wid, {'total_in':0, 'total_out':0})
+                net_w = w['total_in'] - w['total_out']
+                pl_w_pct = (w_pl[wid] / net_w * 100) if net_w > 0 else 0
+                
+                lines += [
+                    f"{icons[wid]} {names[wid]}",
+                    f"💰 Tài sản: {format_currency(w_assets[wid])}",
+                    f"📤 Nạp: {format_currency(w['total_in'])} | 📥 Rút: {format_currency(w['total_out'])}",
+                    f"📈 Lãi/Lỗ: {format_currency(w_pl[wid])} ({format_percent(pl_w_pct)})",
+                    draw_line("thin") if wid != 'OTHER' else draw_line("thick")
+                ]
+
+            return "\n".join(lines)
+        except Exception as e: return f"❌ Lỗi Dashboard: {str(e)}"
