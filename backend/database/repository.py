@@ -54,13 +54,19 @@ class DatabaseRepo:
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
-        """Luân chuyển tiền nội bộ (chuyen/thu) - Có chặn chuyển khống"""
+        """Luân chuyển tiền nội bộ - KHÔNG CỘNG DỒN VÀO TOTAL_IN / TOTAL_OUT"""
         wallet_from = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (from_wallet,), fetch_one=True)
         if not wallet_from or wallet_from['balance'] < amount:
             raise ValueError(f"Ví {from_wallet} không đủ tiền mặt! Hiện có: {wallet_from['balance']:,.0f} đ")
 
+        # Chỉ trừ tiền ví này, cộng tiền ví kia. KHÔNG đụng vào total_in / total_out.
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (amount, to_wallet))
+            
+        self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
+
+    # Xóa DB và test lại lệnh: nap 1 ty -> chuyen stock 300tr. 
+    # Tổng nạp sẽ giữ nguyên 1 tỷ.
         
         if from_wallet == 'CASH': 
             self.execute_query("UPDATE wallets SET total_in = total_in + ? WHERE id = ?", (amount, to_wallet))
@@ -141,3 +147,4 @@ class DatabaseRepo:
             GROUP BY wallet_id, symbol
         """, fetch_all=True)
         return {"wallets": wallets, "holdings": holdings, "realized": realized_map, "perf_symbols": perf_symbols, "goal": self.get_goal()}
+
