@@ -11,11 +11,11 @@ class DashboardModule:
         wallets = {w['id']: w for w in data['wallets']}
         holdings = data['holdings']
         
-        # 1. Hàm tính thông số cho từng Module
+        # 1. Hàm tính thông số cho từng Module con
         def get_mod_stats(mod_id):
             w = wallets.get(mod_id, {'total_in':0, 'total_out':0, 'balance':0})
             h_list = [h for h in holdings if h['wallet_id'] == mod_id]
-            # Tài sản module = Tiền mặt dư + Giá trị thị trường các mã đang giữ
+            # Tài sản = Tiền mặt dư trong ví + Giá trị thị trường hiện tại của danh mục
             asset = w['balance'] + sum(h['quantity'] * (h['current_price'] or h['average_price']) for h in h_list)
             net_inv = w['total_in'] - w['total_out']
             pl = asset - net_inv
@@ -26,33 +26,39 @@ class DashboardModule:
         c_asset, c_in, c_out, c_pl, c_roi = get_mod_stats('CRYPTO')
         k_asset, k_in, k_out, k_pl, k_roi = get_mod_stats('OTHER')
 
-        # 2. Tính toán tầng Master
+        # 2. Tính toán tầng Master (Toàn cục)
         cash_mẹ = wallets['CASH']['balance']
         total_asset = s_asset + c_asset + k_asset + cash_mẹ
         
-        # Vốn thực = Tổng nạp ví mẹ - Tổng rút ví mẹ
+        # Vốn thực ròng = Tổng nạp ví mẹ - Tổng rút ví mẹ
         total_in = wallets['CASH']['total_in']
         total_out = wallets['CASH']['total_out']
         net_capital = total_in - total_out
         
-        # Lãi/Lỗ tổng
+        # Lãi/Lỗ tổng dựa trên chênh lệch Tài sản và Vốn thực ròng
         total_pl = total_asset - net_capital
-        total_roi = (total_pl / net_capital * 100) if net_capital != 0 else 0
+        total_roi = (total_pl / net_capital * 100) if net_capital > 0 else 0
 
-        # 3. Xử lý Mục tiêu
+        # 3. Xử lý Mục tiêu (Goal Tracking)
         goal_str = data['goal']
         goal_val = 0
         try:
-            if "hoa von" in goal_str: goal_val = 0
+            if "hoa von" in goal_str: 
+                goal_val = 0
             elif "%" in goal_str:
                 pct = float(goal_str.replace("lai","").replace("lo","").replace("%","").strip())
                 goal_val = net_capital * (pct/100)
             else:
                 raw_str = goal_str.replace("lai","").replace("lo","").replace("tr","000000").replace("ty","000000000").strip()
                 goal_val = float(raw_str)
-        except: goal_val = net_capital * 0.1
+        except: 
+            goal_val = net_capital * 0.1 # Mặc định 10%
 
-        progress = (total_pl / goal_val * 100) if goal_val != 0 else (100 if total_pl >= 0 else 0)
+        # Tính toán tiến độ mục tiêu
+        if goal_val == 0: # Trường hợp hòa vốn
+            progress = 100.0 if total_pl >= 0 else (total_pl / 1000000) # Hiện số âm nếu chưa về bờ
+        else:
+            progress = (total_pl / goal_val * 100)
         
         lines = [
             "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V2.0", draw_line("thick"),
