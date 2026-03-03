@@ -68,11 +68,34 @@ class DatabaseRepo:
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
     def update_other_asset(self, symbol, current_val):
-        """Ghi nhận tài sản lẻ - Vốn được trích từ ví OTHER"""
+        """Ghi nhận tài sản lẻ - Tự động trích vốn để tránh lỗi tính trùng lãi"""
         symbol = symbol.upper()
-        wallet = self.execute_query("SELECT (total_in - total_out) as net_inv FROM wallets WHERE id = 'OTHER'", fetch_one=True)
-        cost = wallet['net_inv'] if wallet and wallet['net_inv'] > 0 else current_val
-        self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
+        
+        # 1. Kiểm tra vốn trong ví OTHER
+        wallet_other = self.execute_query("SELECT (total_in - total_out) as net_inv FROM wallets WHERE id = 'OTHER'", fetch_one=True)
+        
+        if wallet_other and wallet_other['net_inv'] > 0:
+            # Nếu ví OTHER đã được cấp vốn, dùng số đó làm vốn gốc
+            cost = wallet_other['net_inv']
+            self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
+        else:
+            # Nếu ví OTHER chưa có vốn, kiểm tra ví Mẹ (CASH)
+            wallet_cash = self.execute_query("SELECT balance FROM wallets WHERE id = 'CASH'", fetch_one=True)
+            if wallet_cash and wallet_cash['balance'] >= current_val:
+                # Trích vốn trực tiếp từ ví Mẹ
+                cost = current_val
+                self.transfer_funds('CASH', 'OTHER', current_val)
+                self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
+            else:
+                # Nếu cả hai không đủ tiền, coi như đây là tài sản nạp thêm từ ngoài vào
+                cost = current_val
+                # Tự động tạo lệnh nạp và chuyển để giữ log dòng tiền sạch
+                self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (current_val, current_val))
+                self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', 'NAP', ?)", (current_val,))
+                self.transfer_funds('CASH', 'OTHER', current_val)
+                self.execute_query("UPDATE wallets SET balance = 0 WHERE id = 'OTHER'")
+
+        # 2. Ghi nhận tài sản với Giá vốn đã được xác thực
         self.execute_query("""
             INSERT OR REPLACE INTO holdings (wallet_id, symbol, quantity, average_price, current_price) 
             VALUES ('OTHER', ?, 1, ?, ?)
