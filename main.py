@@ -2,6 +2,7 @@
 import sys, os, time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
+from telebot import types
 from backend.telegram.bot_client import bot
 from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard, get_crypto_keyboard
 from backend.database.repository import DatabaseRepo
@@ -18,18 +19,24 @@ stock_mod = StockModule()
 crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
 
+# Biến toàn cục để theo dõi người dùng đang ở Module nào (Stock hay Crypto)
+user_context = {}
+
 # --- 1. HANDLER MENU CHÍNH (HOME) ---
 
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn"] or message.text == "/start")
 def show_home(message): 
+    user_context[message.chat.id] = 'HOME'
     bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
 def show_stock(message): 
+    user_context[message.chat.id] = 'STOCK'
     bot.send_message(message.chat.id, stock_mod.get_dashboard(), reply_markup=get_stock_keyboard())
 
 @bot.message_handler(func=lambda message: message.text in ["🪙 Crypto", "🟡 Crypto"])
 def show_crypto(message):
+    user_context[message.chat.id] = 'CRYPTO'
     bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "🥇 Tài sản khác")
@@ -62,10 +69,12 @@ def refresh_ins(message):
 
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def show_report(message):
-    # Gửi cả báo cáo Stock và Crypto để Sếp soi
-    bot.send_message(message.chat.id, stock_mod.get_group_report())
-    time.sleep(1)
-    bot.send_message(message.chat.id, crypto_mod.get_group_report())
+    # Sửa lỗi hiển thị kép: Đứng ở ví nào, gọi báo cáo ví đó
+    context = user_context.get(message.chat.id, 'STOCK')
+    if context == 'CRYPTO':
+        bot.send_message(message.chat.id, crypto_mod.get_group_report())
+    else:
+        bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 # --- 3. HANDLER SETTINGS & TỔNG HỢP ---
 
@@ -116,6 +125,10 @@ def handle_manual_commands(message):
             if not parsed: return
             w_type, sym, qty, price = parsed
             
+            # SỬA LỖI MỆNH GIÁ: Nếu là Stock và Sếp gõ giá < 1000, tự nhân 1000
+            if w_type == 'STOCK' and price < 1000:
+                price = price * 1000
+
             # Lấy tỷ giá nếu là lệnh Crypto
             rate = 1
             if w_type == 'CRYPTO':
@@ -144,11 +157,10 @@ def handle_smart_hints(message):
         bot.reply_to(message, "💡 Sếp quên gõ lệnh `s`, `c` hoặc `k` rồi!")
 
 if __name__ == "__main__":
-    print("🚀 Hệ điều hành Tài chính V3.0 (Multi-Asset) đang trực chiến...")
+    print("🚀 Hệ điều hành Tài chính V3.1 (Fixed) đang trực chiến...")
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception as e:
             print(f"⚠️ Lỗi kết nối Telegram: {e}")
             time.sleep(5)
-
