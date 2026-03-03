@@ -30,8 +30,7 @@ def show_stock(message):
 
 @bot.message_handler(func=lambda message: message.text in ["🪙 Crypto", "🟡 Crypto"])
 def show_crypto(message):
-    # Thay vì get_crypto_keyboard, tạm dùng get_stock_keyboard vì layout phím giống nhau
-    bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_stock_keyboard())
+    bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "🥇 Tài sản khác")
 def show_other_assets(message):
@@ -152,3 +151,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Lỗi kết nối Telegram: {e}")
             time.sleep(5)
+
