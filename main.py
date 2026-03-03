@@ -19,7 +19,7 @@ wallet_mod = WalletModule()
 
 user_context = {}
 
-# --- ƯU TIÊN 1: CÁC NÚT BẤM CỐ ĐỊNH ---
+# --- BỘ LỌC NÚT BẤM (CẬP NHẬT CONTEXT) ---
 
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
@@ -36,44 +36,48 @@ def show_crypto(message):
     user_context[message.chat.id] = 'CRYPTO'
     bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
+# --- CÁC NÚT CHỨC NĂNG DÙNG CHUNG ---
+
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def show_report(message):
     ctx = user_context.get(message.chat.id, 'STOCK')
-    msg = crypto_mod.get_group_report() if ctx == 'CRYPTO' else stock_mod.get_group_report()
-    bot.send_message(message.chat.id, msg)
+    if ctx == 'CRYPTO':
+        bot.send_message(message.chat.id, crypto_mod.get_group_report())
+    else:
+        bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
 def trade_ins(message):
-    bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\nStock: `s [MÃ] [SL] [GIÁ VNĐ]`\nCrypto: `c [MÃ] [SL] [GIÁ USD]`", parse_mode="Markdown")
+    bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`\n\n👉 Ví dụ: `c BTC 0.2 65000`", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def refresh_ins(message):
-    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ**\nCú pháp: `up [MÃ] [GIÁ]`\nVí dụ: `up BTC 68000`", parse_mode="Markdown")
+    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\n\nCú pháp: `up [MÃ] [GIÁ]`\n👉 Ví dụ: `up BTC 67000`", parse_mode="Markdown")
 
-# --- ƯU TIÊN 2: CÁC LỆNH GÕ TAY (PARSER) ---
+# --- XỬ LÝ LỆNH GÕ TAY (PARSER) ---
 
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
     try:
-        # Xử lý tỷ giá
+        # Cập nhật tỷ giá
         if text.startswith('rate crypto '):
             val = float(text.replace('rate crypto ', '').strip())
             db.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('crypto_rate', ?)", (val,))
-            bot.reply_to(message, f"✅ Tỷ giá: 1 USD = {val:,.0f} đ")
+            bot.reply_to(message, f"✅ Đã cập nhật tỷ giá: 1 USD = {val:,.0f} đ")
         
-        # Xử lý nạp rút chuyển
+        # Luân chuyển tiền
         elif text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
             bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
 
-        # Xử lý tài sản khác
+        # Tài sản khác
         elif text.startswith('k '):
             parts = text.split()
             name, val = parts[1].upper(), parse_currency(" ".join(parts[2:]))
             db.update_other_asset(name, val)
             bot.reply_to(message, f"✅ Ghi nhận {name}: {val:,.0f} đ")
 
-        # Cập nhật giá thị trường
+        # Cập nhật giá
         elif text.startswith('up '):
             parts = text.split()
             sym, p = parts[1].upper(), float(parts[2])
@@ -88,7 +92,6 @@ def handle_manual_commands(message):
             w_type, sym, qty, price = parsed
             if w_type == 'STOCK' and price < 1000: price *= 1000
             
-            # Lấy tỷ giá
             rate = 1
             if w_type == 'CRYPTO':
                 r_row = db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
@@ -106,5 +109,4 @@ def handle_manual_commands(message):
         bot.reply_to(message, f"❌ Lỗi: {str(e)}")
 
 if __name__ == "__main__":
-    print("🚀 Hệ điều hành V3.4.1 đang online...")
     bot.polling(none_stop=True)
