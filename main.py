@@ -9,6 +9,7 @@ from backend.modules.dashboard import DashboardModule
 from backend.modules.stock import StockModule
 from backend.modules.wallet import WalletModule
 from backend.modules.crypto import CryptoModule
+from backend.modules.data_manager import DataManagerModule
 from backend.core.parser import parse_currency, parse_trade_command
 
 db = DatabaseRepo()
@@ -16,10 +17,9 @@ dash = DashboardModule()
 stock_mod = StockModule()
 crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
+data_mod = DataManagerModule()
 
 user_context = {}
-
-# --- BỘ LỌC NÚT BẤM (CẬP NHẬT CONTEXT) ---
 
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
@@ -36,8 +36,6 @@ def show_crypto(message):
     user_context[message.chat.id] = 'CRYPTO'
     bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
-# --- CÁC NÚT CHỨC NĂNG DÙNG CHUNG ---
-
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def show_report(message):
     ctx = user_context.get(message.chat.id, 'STOCK')
@@ -45,6 +43,21 @@ def show_report(message):
         bot.send_message(message.chat.id, crypto_mod.get_group_report())
     else:
         bot.send_message(message.chat.id, stock_mod.get_group_report())
+
+# --- NÚT DỮ LIỆU ---
+@bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
+def show_data_menu(message):
+    msg, markup = data_mod.get_menu_ui()
+    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+# --- HỨNG FILE UPLOAD (IMPORT JSON) ---
+@bot.message_handler(content_types=['document'])
+def handle_docs(message):
+    if message.document.file_name.endswith('.json'):
+        bot.reply_to(message, "⏳ Đang phân tích sổ sách tài chính...")
+        data_mod.handle_document(bot, message)
+    else:
+        bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
 def trade_ins(message):
@@ -54,30 +67,24 @@ def trade_ins(message):
 def refresh_ins(message):
     bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\n\nCú pháp: `up [MÃ] [GIÁ]`\n👉 Ví dụ: `up BTC 67000`", parse_mode="Markdown")
 
-# --- XỬ LÝ LỆNH GÕ TAY (PARSER) ---
-
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
     try:
-        # Cập nhật tỷ giá
         if text.startswith('rate crypto '):
             val = float(text.replace('rate crypto ', '').strip())
             db.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('crypto_rate', ?)", (val,))
             bot.reply_to(message, f"✅ Đã cập nhật tỷ giá: 1 USD = {val:,.0f} đ")
         
-        # Luân chuyển tiền
         elif text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
             bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
 
-        # Tài sản khác
         elif text.startswith('k '):
             parts = text.split()
             name, val = parts[1].upper(), parse_currency(" ".join(parts[2:]))
             db.update_other_asset(name, val)
             bot.reply_to(message, f"✅ Ghi nhận {name}: {val:,.0f} đ")
 
-        # Cập nhật giá
         elif text.startswith('up '):
             parts = text.split()
             sym, p = parts[1].upper(), float(parts[2])
@@ -85,7 +92,6 @@ def handle_manual_commands(message):
             db.update_market_price(sym, real_p)
             bot.reply_to(message, f"✅ {sym} = {real_p:,.2f}")
 
-        # Giao dịch Mua/Bán
         elif text.startswith(('s ', 'c ')):
             parsed = parse_trade_command(text)
             if not parsed: return
