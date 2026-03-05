@@ -17,10 +17,18 @@ class DatabaseRepo:
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO'), ('OTHER')")
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%'), ('crypto_rate', '25000')")
+            
+            # Cập nhật cấu trúc DB cũ lên V3.4 (Thêm các cột còn thiếu mà không làm mất data)
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
             except: pass
+            
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN cost_basis_vnd REAL DEFAULT 0")
             except: pass
+            
+            # ✅ FIX LỖI IMPORT: Đục thêm cột 'note' vào bảng transactions
+            try: cursor.execute("ALTER TABLE transactions ADD COLUMN note TEXT")
+            except: pass
+            
             conn.commit()
 
     def execute_query(self, query, params=(), fetch_one=False, fetch_all=False):
@@ -99,7 +107,7 @@ class DatabaseRepo:
         }
 
     # ==========================================
-    # CÁC HÀM MỚI CHO MODULE IMPORT / CHỐT SỔ
+    # CÁC HÀM CHO MODULE IMPORT / CHỐT SỔ
     # ==========================================
     def clear_all_data(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -117,6 +125,5 @@ class DatabaseRepo:
         self.execute_query(query, (wallet_id, amount, note))
         
     def insert_raw_transaction(self, wallet_id, tx_type, amount, date_str, note):
-        # Lưu vết giao dịch thô
         query = "INSERT INTO transactions (wallet_id, type, amount, note) VALUES (?, ?, ?, ?)"
         self.execute_query(query, (wallet_id, tx_type, amount, f"[{date_str}] {note}"))
