@@ -28,23 +28,30 @@ class ImportService:
                 # Duyệt qua các tài sản đang cầm thuộc ví này
                 for h in json_data.get('holdings', []):
                     if h['wallet_id'] == w_id:
-                        # Quy ra VNĐ. Stock x1000 nếu < 1000. Crypto x Tỷ giá.
+                        # Hỗ trợ nhận diện cả Giá vốn (average_price) và Giá thị trường (market_price)
                         market_price = h['market_price']
-                        if w_id == 'STOCK' and market_price < 1000: market_price *= 1000
+                        avg_price = h.get('average_price', market_price) # Nếu không khai báo giá vốn thì lấy giá hiện tại
+                        
+                        # Xử lý tự động nhân 1000 cho mã Stock
+                        if w_id == 'STOCK' and market_price < 1000: 
+                            market_price *= 1000
+                            if avg_price < 1000: avg_price *= 1000
                         
                         val_vnd = h['qty'] * market_price * (rate if w_id == 'CRYPTO' else 1)
+                        cost_basis_vnd = h['qty'] * avg_price * (rate if w_id == 'CRYPTO' else 1)
+                        
                         asset_value_vnd += val_vnd
                         
-                        # Nạp danh mục với ROI = 0%
+                        # Nạp danh mục với Lỗ/Lãi chính xác
                         self.db.execute_query(
                             "INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price, cost_basis_vnd) VALUES (?, ?, ?, ?, ?, ?)",
-                            (w_id, h['symbol'].upper(), h['qty'], h['market_price'], h['market_price'], val_vnd)
+                            (w_id, h['symbol'].upper(), h['qty'], avg_price, market_price, cost_basis_vnd)
                         )
 
                 # Cập nhật Ví gốc
                 self.db.force_update_wallet(w_id, current_cash, w_data['total_in'], w_data['total_out'])
 
-                # 4. Thuật toán bù trừ: Ghi Lãi/Lỗ Quá Khứ
+                # 4. Thuật toán bù trừ: Ghi Lãi/Lỗ Quá Khứ đã chốt
                 if w_id in ['STOCK', 'CRYPTO']:
                     current_total = current_cash + asset_value_vnd
                     historical_pnl = current_total - net_capital
