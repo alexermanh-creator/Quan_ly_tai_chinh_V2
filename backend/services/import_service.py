@@ -23,16 +23,16 @@ class ImportService:
             for w_id, w_data in json_data.get('wallets', {}).items():
                 net_capital = w_data['total_in'] - w_data['total_out']
                 current_cash = w_data['current_cash']
+                
                 asset_value_vnd = 0
+                total_cost_basis_vnd = 0 # Đã thêm biến lưu Tổng Giá Vốn
 
                 # Duyệt qua các tài sản đang cầm thuộc ví này
                 for h in json_data.get('holdings', []):
                     if h['wallet_id'] == w_id:
-                        # Hỗ trợ nhận diện cả Giá vốn (average_price) và Giá thị trường (market_price)
                         market_price = h['market_price']
-                        avg_price = h.get('average_price', market_price) # Nếu không khai báo giá vốn thì lấy giá hiện tại
+                        avg_price = h.get('average_price', market_price)
                         
-                        # Xử lý tự động nhân 1000 cho mã Stock
                         if w_id == 'STOCK' and market_price < 1000: 
                             market_price *= 1000
                             if avg_price < 1000: avg_price *= 1000
@@ -41,8 +41,9 @@ class ImportService:
                         cost_basis_vnd = h['qty'] * avg_price * (rate if w_id == 'CRYPTO' else 1)
                         
                         asset_value_vnd += val_vnd
+                        total_cost_basis_vnd += cost_basis_vnd # Cộng dồn Giá Vốn
                         
-                        # Nạp danh mục với Lỗ/Lãi chính xác
+                        # Nạp danh mục
                         self.db.execute_query(
                             "INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price, cost_basis_vnd) VALUES (?, ?, ?, ?, ?, ?)",
                             (w_id, h['symbol'].upper(), h['qty'], avg_price, market_price, cost_basis_vnd)
@@ -51,10 +52,10 @@ class ImportService:
                 # Cập nhật Ví gốc
                 self.db.force_update_wallet(w_id, current_cash, w_data['total_in'], w_data['total_out'])
 
-                # 4. Thuật toán bù trừ: Ghi Lãi/Lỗ Quá Khứ đã chốt
+                # 4. Thuật toán bù trừ: Ghi Lãi/Lỗ Quá Khứ
                 if w_id in ['STOCK', 'CRYPTO']:
-                    current_total = current_cash + asset_value_vnd
-                    historical_pnl = current_total - net_capital
+                    # ✅ FIX LỖI TÍNH ĐÚP: Dùng tổng Giá Vốn (cost_basis) thay vì Giá Thị Trường (asset_value)
+                    historical_pnl = (current_cash + total_cost_basis_vnd) - net_capital
                     if historical_pnl != 0:
                         self.db.insert_historical_pnl(w_id, historical_pnl, f"Lãi/Lỗ dồn tích trước {json_data.get('version', '3.4')}")
 
