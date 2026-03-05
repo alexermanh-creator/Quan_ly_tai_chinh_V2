@@ -1,58 +1,194 @@
 # backend/modules/crypto.py
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from backend.database.repository import DatabaseRepo
-from backend.utils.formatter import format_currency, format_percent, draw_line
 
 class CryptoModule:
     def __init__(self):
         self.db = DatabaseRepo()
 
-    def get_dashboard(self, is_report=False):
-        try:
-            data = self.db.get_dashboard_data()
-            w = next((x for x in data['wallets'] if x['id'] == 'CRYPTO'), {'balance':0, 'total_in':0, 'total_out':0})
-            holdings = [h for h in data['holdings'] if h['wallet_id'] == 'CRYPTO']
-            perf = [p for p in data['perf_symbols'] if p['wallet_id'] == 'CRYPTO']
-            
-            rate_row = self.db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
-            rate = float(rate_row['value']) if rate_row else 25000.0
+    def format_money(self, amount):
+        if abs(amount) >= 1000000:
+            return f"{amount / 1000000:,.1f} triệu"
+        return f"{amount:,.0f} đ"
 
-            gt_thi_truong_vnd = sum(h['quantity'] * (h['current_price'] or h['average_price']) * rate for h in holdings)
-            cost_basis_total_vnd = sum(h.get('cost_basis_vnd', 0) for h in holdings)
-            von_ví_vnd = w['total_in'] - w['total_out']
-            pl_tong_vnd = data['realized'].get('CRYPTO', 0) + (gt_thi_truong_vnd - cost_basis_total_vnd)
+    def format_usd(self, amount):
+        return f"${amount:,.2f}"
 
-            header = "📑 BÁO CÁO TÀI CHÍNH: CRYPTO" if is_report else f"🪙 DANH MỤC TIỀN ĐIỆN TỬ (Rate: {rate:,.0f}đ)"
-            lines = [
-                header, draw_line("thick"),
-                f"💰 Tổng giá trị: {format_currency(w['balance'] + gt_thi_truong_vnd)}",
-                f"💵 Tổng vốn: {format_currency(von_ví_vnd)}",
-                f"💸 Sức mua: {format_currency(w['balance'])}",
-                f"📈 Lãi/Lỗ: {format_currency(pl_tong_vnd)} ({format_percent(pl_tong_vnd/von_ví_vnd*100 if von_ví_vnd>0 else 0)})",
-                draw_line("thin"),
-                "🔄 HOẠT ĐỘNG GIAO DỊCH (VNĐ):",
-                f"🛒 Tổng mua: {format_currency(sum(abs(p['total_invested']) for p in perf))}",
-                f"💰 Tổng bán: {format_currency(sum(p['realized'] + abs(p['total_invested']) for p in perf if p['realized'] != 0))}",
-                "",
-                "🏆 Top Đóng Góp (Lãi chốt):"
-            ]
-            
-            top_gain = sorted([p for p in perf if p['realized'] > 0], key=lambda x: x['realized'], reverse=True)
-            if not top_gain: lines.append("• Chưa có dữ liệu lãi.")
-            for i, p in enumerate(top_gain[:3], 1):
-                lines.append(f"{i}. {p['symbol']}: +{format_currency(p['realized'])}")
+    def _calculate_metrics(self):
+        data = self.db.get_dashboard_data()
+        wallet = next((w for w in data['wallets'] if w['id'] == 'CRYPTO'), None)
+        if not wallet: return None
 
-            lines += [draw_line("thin"), "📊 CHI TIẾT DANH MỤC HIỆN TẠI:"]
-            if not holdings:
-                lines.append("• Trống")
-            else:
-                for h in holdings:
-                    p_now = h['current_price'] or h['average_price']
-                    gt_h_vnd = h['quantity'] * p_now * rate
-                    roi_h = (gt_h_vnd / h['cost_basis_vnd'] - 1) * 100 if h['cost_basis_vnd'] > 0 else 0
-                    lines.append(f"• {h['symbol']}: ROI {format_percent(roi_h)} | GT: {format_currency(gt_h_vnd)}")
+        rate = float(next((s['value'] for s in self.db.execute_query("SELECT * FROM settings WHERE key = 'crypto_rate'", fetch_all=True)), 25000))
+
+        holdings = [h for h in data['holdings'] if h['wallet_id'] == 'CRYPTO']
+        transactions = self.db.execute_query("SELECT * FROM transactions WHERE wallet_id = 'CRYPTO'", fetch_all=True)
+
+        cash = wallet['balance']
+        total_in = wallet['total_in']
+        total_out = wallet['total_out']
+        book_value = total_in - total_out
+
+        total_asset_value = 0
+        best_sym, worst_sym, largest_sym = None, None, None
+        best_profit, worst_profit, max_val = -float('inf'), float('inf'), -1
+
+        holdings_details = []
+
+        for h in holdings:
+            qty = h['quantity']
+            avg_price = h['average_price']
+            cur_price = h['current_price']
+            cost = h['cost_basis_vnd']
+            val = qty * cur_price * rate
             
-            return "\n".join(lines)
-        except Exception as e: return f"❌ Lỗi Crypto Report: {str(e)}"
+            total_asset_value += val
+            profit = val - cost
+            roi = (profit / cost * 100) if cost > 0 else 0
+
+            holdings_details.append({
+                'sym': h['symbol'],
+                'qty': qty,
+                'avg': avg_price,
+                'cur': cur_price,
+                'val': val,
+                'profit': profit,
+                'roi': roi
+            })
+
+            if profit > best_profit:
+                best_profit = profit
+                best_sym = h['symbol']
+            if profit < worst_profit:
+                worst_profit = profit
+                worst_sym = h['symbol']
+            if val > max_val:
+                max_val = val
+                largest_sym = h['symbol']
+
+        total_value = cash + total_asset_value
+        total_profit = total_value - book_value
+        total_roi = (total_profit / book_value * 100) if book_value > 0 else 0
+
+        # Lịch sử giao dịch
+        total_buy = sum(abs(t['amount']) for t in transactions if t['type'] == 'MUA')
+        total_sell = sum(abs(t['amount']) for t in transactions if t['type'] == 'BAN')
+        
+        realized_pl = [t for t in transactions if t['realized_pl'] and t['symbol']]
+        realized_dict = {}
+        for t in realized_pl:
+            realized_dict[t['symbol']] = realized_dict.get(t['symbol'], 0) + t['realized_pl']
+        
+        top_gainers = sorted([(k, v) for k, v in realized_dict.items() if v > 0], key=lambda x: x[1], reverse=True)
+        top_losers = sorted([(k, v) for k, v in realized_dict.items() if v < 0], key=lambda x: x[1])
+
+        return {
+            'cash': cash, 'total_in': total_in, 'total_out': total_out, 'book_value': book_value,
+            'total_value': total_value, 'total_profit': total_profit, 'total_roi': total_roi,
+            'best_sym': best_sym, 'best_profit': best_profit,
+            'worst_sym': worst_sym, 'worst_profit': worst_profit,
+            'largest_sym': largest_sym, 'max_val': max_val,
+            'holdings': holdings_details,
+            'total_buy': total_buy, 'total_sell': total_sell,
+            'top_gainers': top_gainers, 'top_losers': top_losers,
+            'rate': rate
+        }
+
+    def get_dashboard(self):
+        m = self._calculate_metrics()
+        if not m: return "Chưa có dữ liệu Ví Crypto."
+
+        icon_roi = "🟢" if m['total_roi'] >= 0 else "🔴"
+        
+        msg = f"🪙 **DANH MỤC CRYPTO (Rate: {m['rate']:,.0f}đ)**\n━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"💰 Tổng giá trị: {self.format_money(m['total_value'])}\n"
+        msg += f"💵 Tổng vốn: {self.format_money(m['book_value'])}\n"
+        msg += f"💸 Sức mua: {self.format_money(m['cash'])}\n"
+        msg += f"📈 Lãi/Lỗ: {self.format_money(m['total_profit'])} ({icon_roi} {m['total_roi']:+.1f}%)\n"
+        msg += f"⬆️ Tổng nạp ví: {self.format_money(m['total_in'])}\n"
+        msg += f"⬇️ Tổng rút ví: {self.format_money(m['total_out'])}\n"
+
+        if m['holdings']:
+            best_roi = next((h['roi'] for h in m['holdings'] if h['sym'] == m['best_sym']), 0)
+            worst_roi = next((h['roi'] for h in m['holdings'] if h['sym'] == m['worst_sym']), 0)
+            
+            b_icon = "🟢" if best_roi >= 0 else "🔴"
+            w_icon = "🟢" if worst_roi >= 0 else "🔴"
+            
+            msg += f"🏆 Mã tốt nhất: {m['best_sym']} ({b_icon} {best_roi:+.1f}%) ({self.format_money(m['best_profit'])})\n"
+            msg += f"📉 Mã kém nhất: {m['worst_sym']} ({w_icon} {worst_roi:+.1f}%) ({self.format_money(m['worst_profit'])})\n"
+            msg += f"📊 Tỉ trọng lớn nhất: {m['largest_sym']} ({(m['max_val']/sum(h['val'] for h in m['holdings'])*100):.1f}%)\n"
+        else:
+            msg += f"🏆 Mã tốt nhất: -- (0 đ)\n"
+            msg += f"📉 Mã kém nhất: --\n"
+            msg += f"📊 Tỉ trọng lớn nhất: --\n"
+        
+        msg += f"────────────\n"
+
+        for h in m['holdings']:
+            icon = "🟢" if h['profit'] >= 0 else "🔴"
+            msg += f"💎 **{h['sym']}**\n"
+            msg += f"• SL: {h['qty']} | Vốn TB: {self.format_usd(h['avg'])}\n"
+            msg += f"• Hiện tại: {self.format_usd(h['cur'])} | GT: {self.format_money(h['val'])}\n"
+            msg += f"• Lãi: {self.format_money(h['profit'])} ({icon} {h['roi']:+.1f}%)\n"
+            msg += f"───────────\n"
+        
+        msg += f"━━━━━━━━━━━━━━━━━━━"
+        return msg
 
     def get_group_report(self):
-        return self.get_dashboard(is_report=True)
+        m = self._calculate_metrics()
+        if not m: return "Chưa có dữ liệu Báo cáo."
+
+        icon_roi = "🟢" if m['total_roi'] >= 0 else "🔴"
+
+        msg = f"📑 **BÁO CÁO TÀI CHÍNH: CRYPTO**\n━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"🪙 **DANH MỤC CRYPTO**\n"
+        msg += f"💰 Tổng giá trị: {self.format_money(m['total_value'])}\n"
+        msg += f"💵 Tổng vốn: {self.format_money(m['book_value'])}\n"
+        msg += f"💸 Sức mua: {self.format_money(m['cash'])}\n"
+        msg += f"📈 Lãi/Lỗ: {self.format_money(m['total_profit'])} ({icon_roi} {m['total_roi']:+.1f}%)\n"
+        msg += f"⬆️ Tổng nạp ví: {self.format_money(m['total_in'])}\n"
+        msg += f"⬇️ Tổng rút ví: {self.format_money(m['total_out'])}\n"
+
+        if m['holdings']:
+            best_roi = next((h['roi'] for h in m['holdings'] if h['sym'] == m['best_sym']), 0)
+            worst_roi = next((h['roi'] for h in m['holdings'] if h['sym'] == m['worst_sym']), 0)
+            b_icon = "🟢" if best_roi >= 0 else "🔴"
+            w_icon = "🟢" if worst_roi >= 0 else "🔴"
+            
+            msg += f"🏆 Mã tốt nhất: {m['best_sym']} ({b_icon} {best_roi:+.1f}%)\n"
+            msg += f"📉 Mã kém nhất: {m['worst_sym']} ({w_icon} {worst_roi:+.1f}%)\n"
+            msg += f"📊 Tỉ trọng lớn nhất: {m['largest_sym']} ({(m['max_val']/sum(h['val'] for h in m['holdings'])*100):.1f}%)\n"
+        else:
+            msg += f"🏆 Mã tốt nhất: --\n"
+            msg += f"📉 Mã kém nhất: --\n"
+            msg += f"📊 Tỉ trọng lớn nhất: --\n"
+        
+        msg += f"────────────\n"
+        msg += f"🔄 **HOẠT ĐỘNG GIAO DỊCH:**\n"
+        msg += f"🛒 Tổng mua: {self.format_money(m['total_buy'])}\n"
+        msg += f"💰 Tổng bán: {self.format_money(m['total_sell'])}\n\n"
+
+        msg += f"🏆 **Top Đóng Góp (Lãi chốt):**\n"
+        if m['top_gainers']:
+            for i, (sym, val) in enumerate(m['top_gainers'][:3], 1):
+                msg += f"{i}. {sym}: +{self.format_money(val)}\n"
+        else:
+            msg += "• Chưa có dữ liệu lãi.\n"
+
+        msg += f"⚠️ **Top Kéo Lùi (Lỗ chốt):**\n"
+        if m['top_losers']:
+            for i, (sym, val) in enumerate(m['top_losers'][:3], 1):
+                msg += f"{i}. {sym}: {self.format_money(val)}\n"
+        else:
+            msg += "• Chưa có dữ liệu lỗ.\n"
+
+        msg += f"────────────\n"
+        msg += f"📊 **CHI TIẾT DANH MỤC HIỆN TẠI:**\n"
+        for h in m['holdings']:
+            icon = "🟢" if h['profit'] >= 0 else "🔴"
+            msg += f"• {h['sym']}: ROI {icon} {h['roi']:+.1f}% | GT: {self.format_money(h['val'])}\n"
+
+        return msg
