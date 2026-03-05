@@ -41,17 +41,16 @@ class DatabaseRepo:
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
-        """Chuyển vốn: total_in/out của ví con dùng để tính vốn gốc đứng im"""
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = ?", (amount, amount, to_wallet))
-        if from_wallet != 'CASH': # Nếu thu hồi tiền về ví mẹ
+        if from_wallet != 'CASH':
             self.execute_query("UPDATE wallets SET total_out = total_out + ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES (?, 'CHUYEN_IN', ?)", (to_wallet, amount))
 
     def execute_trade(self, wallet_id, symbol, quantity, price, total_value_vnd):
         symbol = symbol.upper()
         holding = self.execute_query("SELECT quantity, average_price, cost_basis_vnd FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
-        if quantity > 0: # MUA
+        if quantity > 0:
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value_vnd, wallet_id))
             if holding:
                 new_qty = holding['quantity'] + quantity
@@ -61,7 +60,7 @@ class DatabaseRepo:
             else:
                 self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price, cost_basis_vnd) VALUES (?, ?, ?, ?, ?, ?)", (wallet_id, symbol, quantity, price, price, total_value_vnd))
             self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, 'MUA', ?, ?, ?, ?, 0)", (wallet_id, symbol, quantity, price, -total_value_vnd))
-        else: # BÁN
+        else:
             abs_qty = abs(quantity)
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value_vnd, wallet_id))
             cost_per_unit = holding['cost_basis_vnd'] / holding['quantity']
@@ -79,7 +78,6 @@ class DatabaseRepo:
         self.execute_query("UPDATE holdings SET current_price = ? WHERE symbol = ?", (new_price, symbol.upper()))
 
     def update_other_asset(self, symbol, current_val):
-        """Hàm thần thánh mua Vàng/BĐS tự trích vốn"""
         symbol = symbol.upper()
         wallet_cash = self.execute_query("SELECT balance FROM wallets WHERE id = 'CASH'", fetch_one=True)
         if wallet_cash and wallet_cash['balance'] >= current_val:
@@ -99,3 +97,26 @@ class DatabaseRepo:
             "perf_symbols": self.execute_query("SELECT wallet_id, symbol, SUM(realized_pl) as realized, SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested FROM transactions WHERE symbol IS NOT NULL GROUP BY wallet_id, symbol", fetch_all=True),
             "goal": self.execute_query("SELECT value FROM settings WHERE key = 'goal'", fetch_one=True)['value']
         }
+
+    # ==========================================
+    # CÁC HÀM MỚI CHO MODULE IMPORT / CHỐT SỔ
+    # ==========================================
+    def clear_all_data(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM transactions")
+            cursor.execute("DELETE FROM holdings")
+            cursor.execute("UPDATE wallets SET balance = 0, total_in = 0, total_out = 0")
+            conn.commit()
+
+    def force_update_wallet(self, wallet_id, balance, total_in, total_out):
+        self.execute_query("UPDATE wallets SET balance = ?, total_in = ?, total_out = ? WHERE id = ?", (balance, total_in, total_out, wallet_id))
+
+    def insert_historical_pnl(self, wallet_id, amount, note):
+        query = "INSERT INTO transactions (wallet_id, type, amount, realized_pl, symbol, note) VALUES (?, 'CHOT_LICH_SU', 0, ?, NULL, ?)"
+        self.execute_query(query, (wallet_id, amount, note))
+        
+    def insert_raw_transaction(self, wallet_id, tx_type, amount, date_str, note):
+        # Lưu vết giao dịch thô
+        query = "INSERT INTO transactions (wallet_id, type, amount, note) VALUES (?, ?, ?, ?)"
+        self.execute_query(query, (wallet_id, tx_type, amount, f"[{date_str}] {note}"))
