@@ -4,15 +4,11 @@ import os, sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from backend.database.repository import DatabaseRepo
+from backend.utils.formatter import format_currency  # Đã import hàm chuẩn từ utils
 
 class HistoryModule:
     def __init__(self):
         self.db = DatabaseRepo()
-
-    def format_money(self, amount):
-        if not amount or amount == 0: return "0 đ"
-        if abs(amount) >= 1000000: return f"{amount / 1000000:,.1f} triệu"
-        return f"{amount:,.0f} đ"
 
     def get_history_ui(self, page=1, filter_type='ALL', symbol=None):
         limit = 5
@@ -59,16 +55,16 @@ class HistoryModule:
                     else: 
                         msg += "\n"
                 
-                # Số tiền biến động
+                # Số tiền biến động (Dùng format_currency chuẩn)
                 if amt != 0:
                     sign = "+" if amt > 0 else ""
-                    msg += f"💰 Giao dịch: {sign}{self.format_money(amt)}\n"
+                    msg += f"💰 Giao dịch: {sign}{format_currency(amt)}\n"
                 
-                # Lãi/Lỗ chốt
+                # Lãi/Lỗ chốt (Dùng format_currency chuẩn)
                 if r_pl:
                     icon = "🟢" if r_pl >= 0 else "🔴"
                     sign = "+" if r_pl > 0 else ""
-                    msg += f"💵 Lãi chốt: {sign}{self.format_money(r_pl)} {icon}\n"
+                    msg += f"💵 Lãi chốt: {sign}{format_currency(r_pl)} {icon}\n"
                 
                 if note: msg += f"📝 {note}\n"
                 msg += "────────────\n"
