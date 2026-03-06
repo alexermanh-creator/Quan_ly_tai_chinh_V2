@@ -130,8 +130,19 @@ def handle_manual_commands(message):
             parts = text.split()
             if len(parts) > 1:
                 term = parts[1].upper()
-                if term in ['NAP', 'RUT']: msg, markup = hist_mod.get_history_ui(filter_type='CASH')
-                else: msg, markup = hist_mod.get_history_ui(symbol=term)
+                # Bổ sung bộ lọc từ khóa thông minh
+                if term in ['NAP', 'RUT', 'CASH']: 
+                    msg, markup = hist_mod.get_history_ui(filter_type='CASH')
+                elif term in ['STOCK', 'CK', 'CHUNGKHOAN']: 
+                    msg, markup = hist_mod.get_history_ui(filter_type='STOCK')
+                elif term in ['CRYPTO', 'COIN']: 
+                    msg, markup = hist_mod.get_history_ui(filter_type='CRYPTO')
+                elif term in ['KHAC', 'OTHER']: 
+                    msg, markup = hist_mod.get_history_ui(filter_type='OTHER')
+                else: 
+                    # Nếu không trúng từ khóa nào ở trên, tự hiểu đó là Mã (Ví dụ: VPB, ETH)
+                    msg, markup = hist_mod.get_history_ui(symbol=term)
+                
                 bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
                 
         elif text.startswith('del '):
@@ -184,4 +195,5 @@ def handle_manual_commands(message):
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
+
 
