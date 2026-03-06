@@ -10,6 +10,7 @@ from backend.modules.stock import StockModule
 from backend.modules.wallet import WalletModule
 from backend.modules.crypto import CryptoModule
 from backend.modules.data_manager import DataManagerModule
+from backend.modules.history import HistoryModule
 from backend.core.parser import parse_currency, parse_trade_command
 
 db = DatabaseRepo()
@@ -18,6 +19,7 @@ stock_mod = StockModule()
 crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
 data_mod = DataManagerModule()
+hist_mod = HistoryModule()
 
 user_context = {}
 
@@ -44,13 +46,11 @@ def show_report(message):
     else:
         bot.send_message(message.chat.id, stock_mod.get_group_report())
 
-# --- NÚT DỮ LIỆU ---
 @bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
 def show_data_menu(message):
     msg, markup = data_mod.get_menu_ui()
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
-# --- HỨNG FILE UPLOAD (IMPORT JSON) ---
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
     if message.document.file_name.endswith('.json'):
@@ -59,19 +59,70 @@ def handle_docs(message):
     else:
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
+# ==========================================
+# MODULE LỊCH SỬ (NÚT BẤM & LỌC)
+# ==========================================
+@bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
+def show_history(message):
+    msg, markup = hist_mod.get_history_ui(page=1, filter_type='ALL')
+    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('his_'))
+def handle_history_callbacks(call):
+    data = call.data
+    if data == 'ignore':
+        bot.answer_callback_query(call.id)
+        return
+        
+    if data == 'his_search':
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "🔍 **HƯỚNG DẪN TÌM KIẾM NHANH**\n\nGõ lệnh:\n👉 `his [MÃ]` (VD: `his VPB`)\n👉 `his nap` (Xem lịch sử Nạp)\n👉 `his rut` (Xem lịch sử Rút)", parse_mode="Markdown")
+        return
+
+    parts = data.split('_')
+    if parts[1] == 'p': # Phân trang: his_p_2_STOCK_NONE
+        page, filter_type = int(parts[2]), parts[3]
+        symbol = parts[4] if parts[4] != 'NONE' else None
+        msg, markup = hist_mod.get_history_ui(page, filter_type, symbol)
+        bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    
+    elif parts[1] == 'f': # Lọc: his_f_STOCK
+        filter_type = parts[2]
+        msg, markup = hist_mod.get_history_ui(page=1, filter_type=filter_type)
+        bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+
+# ==========================================
+# PARSER NHẬN DIỆN LỆNH GÕ TAY
+# ==========================================
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
 def trade_ins(message):
-    bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`\n\n👉 Ví dụ: `c BTC 0.2 65000`", parse_mode="Markdown")
+    bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def refresh_ins(message):
-    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\n\nCú pháp: `up [MÃ] [GIÁ]`\n👉 Ví dụ: `up BTC 67000`", parse_mode="Markdown")
+    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\nCú pháp: `up [MÃ] [GIÁ]`", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ']))
+@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
     try:
-        if text.startswith('rate crypto '):
+        # Lịch sử nhanh
+        if text.startswith('his '):
+            parts = text.split()
+            if len(parts) > 1:
+                term = parts[1].upper()
+                if term in ['NAP', 'RUT']: msg, markup = hist_mod.get_history_ui(filter_type='CASH')
+                else: msg, markup = hist_mod.get_history_ui(symbol=term)
+                bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
+                
+        # Xóa mã gõ nhầm & Hoàn tiền
+        elif text.startswith('del '):
+            sym = text.split()[1].upper()
+            _, msg_text = db.delete_holding_and_refund(sym)
+            bot.reply_to(message, msg_text, parse_mode="Markdown")
+
+        # Các lệnh cũ giữ nguyên
+        elif text.startswith('rate crypto '):
             val = float(text.replace('rate crypto ', '').strip())
             db.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('crypto_rate', ?)", (val,))
             bot.reply_to(message, f"✅ Đã cập nhật tỷ giá: 1 USD = {val:,.0f} đ")
