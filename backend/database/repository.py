@@ -18,14 +18,10 @@ class DatabaseRepo:
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%'), ('crypto_rate', '25000')")
             
-            # Cập nhật cấu trúc DB cũ lên V3.4 (Thêm các cột còn thiếu mà không làm mất data)
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
             except: pass
-            
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN cost_basis_vnd REAL DEFAULT 0")
             except: pass
-            
-            # ✅ FIX LỖI IMPORT: Đục thêm cột 'note' vào bảng transactions
             try: cursor.execute("ALTER TABLE transactions ADD COLUMN note TEXT")
             except: pass
             
@@ -107,7 +103,7 @@ class DatabaseRepo:
         }
 
     # ==========================================
-    # CÁC HÀM CHO MODULE IMPORT / CHỐT SỔ
+    # IMPORT / CHỐT SỔ
     # ==========================================
     def clear_all_data(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -127,3 +123,56 @@ class DatabaseRepo:
     def insert_raw_transaction(self, wallet_id, tx_type, amount, date_str, note):
         query = "INSERT INTO transactions (wallet_id, type, amount, note) VALUES (?, ?, ?, ?)"
         self.execute_query(query, (wallet_id, tx_type, amount, f"[{date_str}] {note}"))
+
+    # ==========================================
+    # MODULE LỊCH SỬ & HOÀN TIỀN (NEW)
+    # ==========================================
+    def get_transactions_paginated(self, limit=5, offset=0, filter_type='ALL', symbol=None):
+        query = "SELECT * FROM transactions WHERE 1=1"
+        params = []
+        
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol.upper())
+        elif filter_type in ['CASH', 'STOCK', 'CRYPTO', 'OTHER']:
+            query += " AND wallet_id = ?"
+            params.append(filter_type)
+            
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        return self.execute_query(query, tuple(params), fetch_all=True)
+
+    def get_transactions_count(self, filter_type='ALL', symbol=None):
+        query = "SELECT COUNT(*) as total FROM transactions WHERE 1=1"
+        params = []
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol.upper())
+        elif filter_type in ['CASH', 'STOCK', 'CRYPTO', 'OTHER']:
+            query += " AND wallet_id = ?"
+            params.append(filter_type)
+            
+        res = self.execute_query(query, tuple(params), fetch_one=True)
+        return res['total'] if res else 0
+
+    def delete_holding_and_refund(self, symbol):
+        symbol = symbol.upper()
+        holding = self.execute_query("SELECT * FROM holdings WHERE symbol = ?", (symbol,), fetch_one=True)
+        
+        if not holding:
+            return False, f"⚠️ Lỗi: Không tìm thấy mã **{symbol}** trong danh mục hiện tại."
+            
+        wallet_id = holding['wallet_id']
+        cost_basis = holding['cost_basis_vnd']
+        
+        # 1. Hoàn tiền lại vào Sức mua của ví
+        self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (cost_basis, wallet_id))
+        
+        # 2. Xóa sổ
+        self.execute_query("DELETE FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol))
+        
+        # 3. Ghi log lịch sử hoàn tiền
+        self.execute_query("INSERT INTO transactions (wallet_id, type, amount, note) VALUES (?, 'HOAN_TIEN', ?, ?)", 
+                           (wallet_id, cost_basis, f"Đã xóa mã {symbol} do gõ nhầm và hoàn vốn gốc"))
+                           
+        return True, f"🗑️ **ĐÃ XÓA MÃ {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Hoàn trả lại Sức mua: **+ {cost_basis:,.0f} đ** vào ví {wallet_id}.\n(Dòng tiền đã được cân bằng lại an toàn)"
