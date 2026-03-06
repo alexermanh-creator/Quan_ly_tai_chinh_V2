@@ -73,13 +73,10 @@ def handle_docs(message):
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
 def show_history(message):
-    # Kích hoạt bàn phím ảo [::] Lịch Sử trước
-    bot.send_message(message.chat.id, "🗄️ **ĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
-    # Gửi bảng dữ liệu có nút lật trang
+    bot.send_message(message.chat.id, "🗄️ **ĐĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
     msg, markup = hist_mod.get_history_ui(page=1, filter_type='ALL')
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
-# Xử lý các nút bấm từ bàn phím [::]
 @bot.message_handler(func=lambda message: message.text in ["💵 LS Nạp/Rút", "📊 LS Chứng khoán", "🪙 LS Crypto", "🥇 LS Khác"])
 def handle_history_filters(message):
     filter_map = {
@@ -101,11 +98,11 @@ def close_history_menu(message):
     bot.send_message(message.chat.id, "✅ Đã đóng Menu Lịch sử.", reply_markup=get_home_keyboard())
     show_home(message)
 
-# Xử lý lật trang Inline
-@bot.callback_query_handler(func=lambda call: call.data.startswith('his_'))
+# Xử lý lật trang Inline (ĐÃ FIX LỖI BỎ QUÊN NÚT 🚫)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('his_') or call.data == 'ignore')
 def handle_history_callbacks(call):
     if call.data == 'ignore':
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, "⚠️ Bạn đang ở ranh giới trang (đầu/cuối) rồi!", show_alert=False)
         return
     parts = call.data.split('_')
     if parts[1] == 'p': 
