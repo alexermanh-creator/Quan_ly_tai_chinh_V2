@@ -51,7 +51,7 @@ class HistoryModule:
                 
                 msg += f"🔹 **ID: #{t_id}** | `{t_type}`\n"
                 
-                # Chi tiết Mua/Bán (nếu có)
+                # Chi tiết Mua/Bán
                 if sym:
                     msg += f"💎 **{sym}** "
                     if qty and price: 
@@ -70,34 +70,18 @@ class HistoryModule:
                     sign = "+" if r_pl > 0 else ""
                     msg += f"💵 Lãi chốt: {sign}{self.format_money(r_pl)} {icon}\n"
                 
-                # Ghi chú
-                if note:
-                    msg += f"📝 {note}\n"
-                    
+                if note: msg += f"📝 {note}\n"
                 msg += "────────────\n"
             msg += "━━━━━━━━━━━━━━━━━━━\n"
 
-        # Vẽ Bàn phím điều hướng (Inline Keyboard)
-        markup = InlineKeyboardMarkup(row_width=2)
-        
-        # Row 1: Phân trang
-        btn_prev = InlineKeyboardButton("⬅️ Trước", callback_data=f"his_p_{page-1}_{filter_type}_{symbol or 'NONE'}")
-        btn_next = InlineKeyboardButton("Sau ➡️", callback_data=f"his_p_{page+1}_{filter_type}_{symbol or 'NONE'}")
-        if page == 1: btn_prev = InlineKeyboardButton("🚫", callback_data="ignore")
-        if page == total_pages: btn_next = InlineKeyboardButton("🚫", callback_data="ignore")
-        markup.row(btn_prev, btn_next)
-
-        # Row 2 & 3: Lọc dữ liệu
-        if not symbol:
-            markup.add(
-                InlineKeyboardButton("💵 Nạp/Rút", callback_data="his_f_CASH"),
-                InlineKeyboardButton("📊 Chứng khoán", callback_data="his_f_STOCK"),
-                InlineKeyboardButton("🪙 Crypto", callback_data="his_f_CRYPTO"),
-                InlineKeyboardButton("🥇 Tài sản Khác", callback_data="his_f_OTHER"),
-                InlineKeyboardButton("🔍 Tìm kiếm", callback_data="his_search"),
-                InlineKeyboardButton("🔄 Xem Tất Cả", callback_data="his_f_ALL")
-            )
-        else:
-            markup.add(InlineKeyboardButton("🔙 Quay lại Tất cả", callback_data="his_f_ALL"))
+        # TỰ ĐỘNG ẨN MÀN HÌNH NẾU CHỈ CÓ 1 TRANG
+        markup = None
+        if total_pages > 1:
+            markup = InlineKeyboardMarkup(row_width=2)
+            btn_prev = InlineKeyboardButton("⬅️ Trước", callback_data=f"his_p_{page-1}_{filter_type}_{symbol or 'NONE'}")
+            btn_next = InlineKeyboardButton("Sau ➡️", callback_data=f"his_p_{page+1}_{filter_type}_{symbol or 'NONE'}")
+            if page == 1: btn_prev = InlineKeyboardButton("🚫", callback_data="ignore")
+            if page == total_pages: btn_next = InlineKeyboardButton("🚫", callback_data="ignore")
+            markup.row(btn_prev, btn_next)
 
         return msg, markup
