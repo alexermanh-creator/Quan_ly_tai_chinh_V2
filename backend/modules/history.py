@@ -76,8 +76,11 @@ class HistoryModule:
             markup = InlineKeyboardMarkup(row_width=2)
             btn_prev = InlineKeyboardButton("⬅️ Trước", callback_data=f"his_p_{page-1}_{filter_type}_{symbol or 'NONE'}")
             btn_next = InlineKeyboardButton("Sau ➡️", callback_data=f"his_p_{page+1}_{filter_type}_{symbol or 'NONE'}")
-            if page == 1: btn_prev = InlineKeyboardButton("🚫", callback_data="ignore")
-            if page == total_pages: btn_next = InlineKeyboardButton("🚫", callback_data="ignore")
+            
+            # Đổi icon 🚫 thành ký tự tàng hình (Zero-width space)
+            if page == 1: btn_prev = InlineKeyboardButton("‎", callback_data="ignore")
+            if page == total_pages: btn_next = InlineKeyboardButton("‎", callback_data="ignore")
+            
             markup.row(btn_prev, btn_next)
 
         return msg, markup
