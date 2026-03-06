@@ -73,7 +73,7 @@ def handle_docs(message):
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
 def show_history(message):
-    bot.send_message(message.chat.id, "🗄️ **ĐĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🗄️ **ĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
     msg, markup = hist_mod.get_history_ui(page=1, filter_type='ALL')
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
@@ -184,3 +184,4 @@ def handle_manual_commands(message):
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
+
