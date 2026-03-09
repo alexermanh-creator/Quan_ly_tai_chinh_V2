@@ -3,4 +3,5 @@ python-dotenv==1.0.1
 pandas
 openpyxl
 matplotlib
+Pillow
 
