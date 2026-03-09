@@ -60,14 +60,12 @@ class ReportModule:
         losses = 0
         total_realized = 0
         
-        # Biến phục vụ tính Max Drawdown
         current_cap = 0
         current_realized_pl = 0
         peak_nav_proxy = 0
 
         transactions = sorted(data['transactions'], key=lambda x: x['id'])
         for t in transactions:
-            # Tính Lãi/Lỗ và Win Rate
             pl = t['realized_pl']
             if pl is not None:
                 total_realized += pl
@@ -81,7 +79,6 @@ class ReportModule:
                 if pl > 0: wins += 1
                 elif pl < 0: losses += 1
             
-            # Tính đỉnh cao nhất của tài sản (Peak NAV Proxy) để đo Max Drawdown
             if t['type'] in ['NAP', 'RUT'] and t['wallet_id'] == 'CASH':
                 current_cap += (t['amount'] or 0)
             if pl is not None:
@@ -93,7 +90,6 @@ class ReportModule:
         total_trades = wins + losses
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         
-        # Chốt Max Drawdown
         peak_nav = max(peak_nav_proxy, total_assets)
         max_drawdown = ((peak_nav - total_assets) / peak_nav * 100) if peak_nav > 0 else 0
         
@@ -210,7 +206,7 @@ class ReportModule:
         if stats['total_assets'] > 0:
             msg += f"🏁 Tiến độ mục tiêu: Đạt {goal_progress:.1f}% ({goal_text})\n"
         msg += f"⚖️ Win Rate: {stats['win_rate']:.1f}% ({stats['wins']} Lãi / {stats['losses']} Lỗ)\n"
-        msg += f"📉 Max Drawdown (Sụt giảm tối đa): -{stats['max_drawdown']:.1f}%\n"
+        msg += f"📉 Max Drawdown: -{stats['max_drawdown']:.1f}%\n"
         msg += f"────────────\n"
         
         msg += f"⚖️ **PHÂN BỔ TỶ TRỌNG & HIỆU SUẤT**\n"
@@ -264,13 +260,11 @@ class ReportModule:
             df_dash = pd.DataFrame(overview_data)
             df_dash.to_excel(writer, sheet_name="Dashboard", index=False, startrow=0)
             
-            # Bảng Phân Bổ (Ẩn để vẽ Pie Chart)
             stock_val = stats['wallets']['STOCK']['assets'] + stats['wallets']['STOCK']['balance']
             crypto_val = stats['wallets']['CRYPTO']['assets'] + stats['wallets']['CRYPTO']['balance']
             df_alloc = pd.DataFrame({"Ví": ["STOCK", "CRYPTO"], "Tài Sản": [stock_val, crypto_val]})
             df_alloc.to_excel(writer, sheet_name="Dashboard", index=False, startrow=10)
 
-            # TÍNH NĂNG MỚI: BẢNG TRẬN ĐỒ MATRIX (Stock vs Crypto)
             matrix_data = {
                 "Danh Mục": ["Chứng Khoán (STOCK)", "Tiền Số (CRYPTO)"],
                 "Tài Sản Hiện Tại": [stock_val, crypto_val],
@@ -282,7 +276,7 @@ class ReportModule:
             df_matrix.to_excel(writer, sheet_name="Dashboard", index=False, startrow=15)
 
             # ==========================================
-            # SHEET 2, 3, 4: PORTFOLIO, PERFORMANCE, LEDGER
+            # SHEET 2, 3, 4
             # ==========================================
             port_cols = ["Ví", "Mã", "Số Lượng", "Giá Vốn TB", "Giá Hiện Tại", "Vốn Gốc VNĐ", "Lãi/Lỗ Tạm Tính"]
             portfolio = []
@@ -313,12 +307,22 @@ class ReportModule:
             df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
 
             # ==========================================
-            # TÔ MÀU THÔNG MINH & VẼ BIỂU ĐỒ BẰNG OPENPYXL
+            # FORMAT & VẼ BIỂU ĐỒ BẰNG OPENPYXL
             # ==========================================
             wb = writer.book
             ws_dash = wb["Dashboard"]
             
-            # Định dạng màu cho số Dương (Xanh) và Âm (Đỏ)
+            # Ép nới rộng toàn bộ mặt tiền Dashboard từ cột A đến G
+            for col_str in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
+                ws_dash.column_dimensions[col_str].width = 22
+
+            # Ép Format số (có dấu phẩy) cho TOÀN BỘ Dashboard
+            for row in ws_dash.iter_rows(min_row=2, max_row=25):
+                for cell in row:
+                    if isinstance(cell.value, (int, float)):
+                        cell.number_format = '#,##0'
+
+            # Quy luật màu sắc cho các ô Lãi/Lỗ
             green_fill = PatternFill(start_color='E6F4EA', end_color='E6F4EA', fill_type='solid')
             green_font = Font(color='137333', bold=True)
             red_fill = PatternFill(start_color='FCE8E6', end_color='FCE8E6', fill_type='solid')
@@ -327,45 +331,35 @@ class ReportModule:
             rule_red = CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, font=red_font, fill=red_fill)
 
             try:
-                # Ảnh Line Chart chèn hẳn sang cột H (H1) để tránh đè bảng
+                # Ảnh Line Chart chèn sang cột H (Mái vòm phải)
                 chart_io = self._generate_nav_chart_io(stats, raw)
                 img = ExcelImage(chart_io)
                 ws_dash.add_image(img, "H1") 
             except: pass
 
             try:
-                # Biểu đồ Tròn chèn vào cột H (H25) nằm dưới ảnh Line Chart
+                # Biểu đồ Tròn dời xuống dưới Bảng Matrix (B21)
                 pie = PieChart()
                 pie.title = "Phân Bổ Tỷ Trọng Vốn"
                 labels = Reference(ws_dash, min_col=1, min_row=12, max_row=13)
                 data = Reference(ws_dash, min_col=2, min_row=11, max_row=13)
                 pie.add_data(data, titles_from_data=True)
                 pie.set_categories(labels)
-                ws_dash.add_chart(pie, "H25") 
+                ws_dash.add_chart(pie, "B21") 
             except: pass
 
-            for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
+            for sheet_name, df in [("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
                 ws = wb[sheet_name]
-                
-                # Căn rộng cột và format số
                 for i, col in enumerate(df.columns):
                     col_letter = get_column_letter(i + 1)
                     ws.column_dimensions[col_letter].width = 18 
-                    
                 for row in ws.iter_rows(min_row=2):
                     for cell in row:
                         if isinstance(cell.value, (int, float)):
                             cell.number_format = '#,##0' 
-
-                # Quét và áp dụng màu Tự động cho các cột Lãi/Lỗ
-                if sheet_name == "Dashboard":
-                    # Tô màu ô Lãi/Lỗ Tổng (B6)
-                    ws.conditional_formatting.add("B6:B6", rule_green)
-                    ws.conditional_formatting.add("B6:B6", rule_red)
-                    # Tô màu Bảng Matrix (C17:E18)
-                    ws.conditional_formatting.add("C17:E18", rule_green)
-                    ws.conditional_formatting.add("C17:E18", rule_red)
-                elif sheet_name == "Portfolio":
+                
+                # Áp dụng màu tự động cho Lãi/Lỗ ở các Sheet phụ
+                if sheet_name == "Portfolio":
                     ws.conditional_formatting.add("G2:G1000", rule_green)
                     ws.conditional_formatting.add("G2:G1000", rule_red)
                 elif sheet_name == "Performance":
@@ -375,24 +369,28 @@ class ReportModule:
                     ws.conditional_formatting.add("H2:H5000", rule_green)
                     ws.conditional_formatting.add("H2:H5000", rule_red)
                 
-                # Đóng khung Table chuẩn
                 try:
-                    if sheet_name != "Dashboard":
-                        max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
-                        ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
-                        tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
-                        tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
-                        ws.add_table(tab)
-                    else:
-                        # Bảng Tổng quan
-                        tab1 = Table(displayName="Tbl_Dash", ref=f"A1:B8")
-                        tab1.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
-                        ws.add_table(tab1)
-                        # Bảng Matrix
-                        tab_matrix = Table(displayName="Tbl_Matrix", ref=f"A16:E18")
-                        tab_matrix.tableStyleInfo = TableStyleInfo(name="TableStyleMedium14", showRowStripes=True)
-                        ws.add_table(tab_matrix)
-                except:
-                    pass
+                    max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
+                    ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
+                    tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
+                    tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                    ws.add_table(tab)
+                except: pass
+
+            # Áp dụng Table và Màu cho Dashboard
+            try:
+                ws_dash.conditional_formatting.add("B6:B6", rule_green)
+                ws_dash.conditional_formatting.add("B6:B6", rule_red)
+                ws_dash.conditional_formatting.add("C17:E18", rule_green)
+                ws_dash.conditional_formatting.add("C17:E18", rule_red)
+                
+                tab1 = Table(displayName="Tbl_Dash", ref=f"A1:B8")
+                tab1.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                ws_dash.add_table(tab1)
+                
+                tab_matrix = Table(displayName="Tbl_Matrix", ref=f"A16:E18")
+                tab_matrix.tableStyleInfo = TableStyleInfo(name="TableStyleMedium14", showRowStripes=True)
+                ws_dash.add_table(tab_matrix)
+            except: pass
 
         return output.getvalue()
