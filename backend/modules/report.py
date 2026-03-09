@@ -1,7 +1,10 @@
 # backend/modules/report.py
 import pandas as pd
 import io
+import re
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 from backend.database.repository import DatabaseRepo
 from backend.utils.formatter import format_currency
 
@@ -53,7 +56,7 @@ class ReportModule:
         
         for t in data['transactions']:
             pl = t['realized_pl']
-            if pl:
+            if pl is not None:
                 total_realized += pl
                 wallet_stats[t['wallet_id']]['realized'] += pl
                 sym = t['symbol']
@@ -93,20 +96,31 @@ class ReportModule:
     def get_telegram_report(self):
         stats = self._process_data()
         
-        # NAV
+        # NAV & Goal
         pl_icon = "🟢" if stats['total_pl'] >= 0 else "🔴"
         sign = "+" if stats['total_pl'] > 0 else ""
         nav_roi = (stats['total_pl'] / stats['net_cashflow'] * 100) if stats['net_cashflow'] > 0 else 0
         
+        goal_text = stats['raw_data']['settings'].get('goal', 'lai 10%')
+        goal_pct = 10
+        try:
+            m = re.search(r'\d+', goal_text)
+            if m: goal_pct = float(m.group())
+        except: pass
+        goal_progress = (nav_roi / goal_pct * 100) if goal_pct > 0 else 0
+        
+        # Format UI đã bỏ số đếm
         msg = f"📊 **BÁO CÁO QUẢN TRỊ DANH MỤC**\n━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"1️⃣ **HIỆU QUẢ ĐẦU TƯ (NAV)**\n"
+        msg += f"🎯 **HIỆU QUẢ ĐẦU TƯ (NAV)**\n"
         msg += f"💰 Tổng tài sản: {format_currency(stats['total_assets'])}\n"
         msg += f"📈 Lãi/Lỗ tổng: {sign}{format_currency(stats['total_pl'])} ({pl_icon} {sign}{nav_roi:.1f}%)\n"
+        if stats['total_assets'] > 0:
+            msg += f"🏁 Tiến độ mục tiêu: Đạt {goal_progress:.1f}% ({goal_text})\n"
         msg += f"⚖️ Win Rate: {stats['win_rate']:.1f}% ({stats['wins']} Lãi / {stats['losses']} Lỗ)\n"
         msg += f"────────────\n"
         
         # Phân bổ
-        msg += f"2️⃣ & 5️⃣ **PHÂN BỔ TỶ TRỌNG**\n"
+        msg += f"⚖️ **PHÂN BỔ TỶ TRỌNG & HIỆU SUẤT**\n"
         for wid in ['STOCK', 'CRYPTO']:
             w_assets = stats['wallets'][wid]['assets'] + stats['wallets'][wid]['balance']
             pct = (w_assets / stats['total_assets'] * 100) if stats['total_assets'] > 0 else 0
@@ -116,7 +130,7 @@ class ReportModule:
         msg += f"────────────\n"
         
         # Dòng tiền
-        msg += f"4️⃣ **LỢI NHUẬN ĐẾN TỪ ĐÂU?**\n"
+        msg += f"🔍 **LỢI NHUẬN ĐẾN TỪ ĐÂU?**\n"
         msg += f"💵 Lãi đã chốt (Tiền về ví): {format_currency(stats['total_realized'])}\n"
         msg += f"📄 Lãi trên giấy (Chưa chốt): {format_currency(stats['total_unrealized'])}\n"
         if stats['top_winners']:
@@ -126,9 +140,11 @@ class ReportModule:
         msg += f"────────────\n"
         
         if stats['top_losers']:
-            msg += f"3️⃣ **TÀI SẢN KÉO LÙI DANH MỤC**\n⚠️ **Top Tội Đồ:**\n"
+            msg += f"⚠️ **TÀI SẢN KÉO LÙI DANH MỤC**\n"
             for sym, data in stats['top_losers']:
                 msg += f"• {sym} ({data['wallet']}): 🔴 {format_currency(data['total_pl'])}\n"
+            msg += f"────────────\n"
+            
         msg += f"━━━━━━━━━━━━━━━━━━━"
 
         markup = InlineKeyboardMarkup()
@@ -142,14 +158,15 @@ class ReportModule:
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Sheet 1: Tổng quan
+            # 1. Dashboard
             overview_data = {
-                "Chỉ số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)"],
-                "Giá trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate']]
+                "Chỉ Số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)"],
+                "Giá Trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate']]
             }
-            pd.DataFrame(overview_data).to_excel(writer, sheet_name="Dashboard", index=False)
+            df_dash = pd.DataFrame(overview_data)
+            df_dash.to_excel(writer, sheet_name="Dashboard", index=False)
             
-            # Sheet 2: Danh mục
+            # 2. Portfolio
             portfolio = []
             for h in raw['holdings']:
                 portfolio.append({
@@ -157,12 +174,24 @@ class ReportModule:
                     "Giá Vốn TB": h['average_price'], "Giá Hiện Tại": h['current_price'],
                     "Vốn Gốc VNĐ": h['cost_basis_vnd']
                 })
-            if portfolio:
-                pd.DataFrame(portfolio).to_excel(writer, sheet_name="Portfolio", index=False)
-            else:
-                pd.DataFrame({"Thông báo": ["Chưa có tài sản"]}).to_excel(writer, sheet_name="Portfolio", index=False)
+            df_port = pd.DataFrame(portfolio) if portfolio else pd.DataFrame({"Mã": ["Chưa có dữ liệu"]})
+            df_port.to_excel(writer, sheet_name="Portfolio", index=False)
+
+            # 3. Performance (NEW - Dữ liệu Lãi/Lỗ thực tế đã chốt)
+            perf_dict = {}
+            for t in raw['transactions']:
+                if t['type'] == 'BAN' and t['realized_pl'] is not None and t['symbol']:
+                    sym = t['symbol']
+                    if sym not in perf_dict:
+                        perf_dict[sym] = {"Số Lần Bán": 0, "Tổng Lãi/Lỗ Thực Tế": 0}
+                    perf_dict[sym]["Số Lần Bán"] += 1
+                    perf_dict[sym]["Tổng Lãi/Lỗ Thực Tế"] += t['realized_pl']
             
-            # Sheet 3: Lịch sử giao dịch
+            perf_list = [{"Mã": k, "Số Lần Bán": v["Số Lần Bán"], "Tổng Lãi/Lỗ Thực Tế": v["Tổng Lãi/Lỗ Thực Tế"]} for k, v in perf_dict.items()]
+            df_perf = pd.DataFrame(perf_list) if perf_list else pd.DataFrame({"Mã": ["Chưa có dữ liệu"]})
+            df_perf.to_excel(writer, sheet_name="Performance", index=False)
+
+            # 4. Ledger
             transactions = []
             for t in raw['transactions']:
                 transactions.append({
@@ -170,10 +199,30 @@ class ReportModule:
                     "Số Lượng": t['quantity'], "Giá": t['price'], "Thành Tiền": t['amount'],
                     "Lãi Chốt": t['realized_pl'], "Ghi Chú": t['note']
                 })
-            if transactions:
-                pd.DataFrame(transactions).to_excel(writer, sheet_name="Ledger", index=False)
-            else:
-                pd.DataFrame({"Thông báo": ["Chưa có giao dịch"]}).to_excel(writer, sheet_name="Ledger", index=False)
+            df_ledger = pd.DataFrame(transactions) if transactions else pd.DataFrame({"ID": ["Chưa có dữ liệu"]})
+            df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
+
+            # --- TỰ ĐỘNG FORMAT BẢNG & ĐỘ RỘNG CỘT BẰNG OPENPYXL ---
+            wb = writer.book
+            for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
+                ws = wb[sheet_name]
+                
+                # Căn chỉnh độ rộng cột tự động
+                for i, col in enumerate(df.columns):
+                    col_letter = get_column_letter(i + 1)
+                    # Tìm chuỗi dài nhất trong cột hoặc tiêu đề
+                    max_len = max(df[col].astype(str).map(len).max() if not df.empty else 0, len(str(col))) + 4
+                    ws.column_dimensions[col_letter].width = max_len
+                
+                # Bọc Data thành định dạng Table chuẩn Excel
+                if not df.empty and df.columns[0] not in ["Chưa có dữ liệu", "Mã", "ID"] or (df.shape[0] > 0 and len(df.columns) > 1):
+                    max_row, max_col = df.shape
+                    ref = f"A1:{get_column_letter(max_col)}{max_row + 1}"
+                    tab = Table(displayName=f"Table_{sheet_name}", ref=ref)
+                    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
+                                           showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+                    tab.tableStyleInfo = style
+                    ws.add_table(tab)
 
         output.seek(0)
         return output
