@@ -37,6 +37,7 @@ class ReportModule:
                 total_in = w['total_in'] or 0
                 total_out = w['total_out'] or 0
                 total_assets += w['balance'] or 0
+            # Lưu thêm total_in/out vào stats để làm báo cáo summary
             wallet_stats[wid] = {
                 'balance': w['balance'] or 0, 
                 'assets': 0, 
@@ -320,7 +321,7 @@ class ReportModule:
             df_perf = pd.DataFrame(perf_list, columns=perf_cols) if perf_list else pd.DataFrame([[""]*len(perf_cols)], columns=perf_cols)
             df_perf.to_excel(writer, sheet_name="Performance", index=False)
 
-            # 3. TÁCH CÁC SHEET LỊCH SỬ (STARTROW=16 ĐỂ CHỪA CHỖ CHO SUMMARY)
+            # 3. TÁCH CÁC SHEET LỊCH SỬ (BẮT ĐẦU TỪ DÒNG 17 ĐỂ CHỪA CHỖ CHO SUMMARY)
             ledger_cols = ["ID", "Loại", "Ví", "Mã", "Số Lượng", "Giá", "Thành Tiền", "Lãi Chốt", "Ghi Chú"]
             transactions = []
             for t in raw['transactions']:
@@ -341,7 +342,7 @@ class ReportModule:
             df_stock.to_excel(writer, sheet_name="LS Chứng Khoán", index=False, startrow=16)
             df_crypto.to_excel(writer, sheet_name="LS Crypto", index=False, startrow=16)
 
-            # 4. ANALYTICS (Heatmap, Rebalancing, Trade Analytics)
+            # 4. HEATMAP
             heat_dict = {}
             for t in raw['transactions']:
                 pl = t.get('realized_pl')
@@ -365,14 +366,44 @@ class ReportModule:
             df_heatmap = pd.DataFrame(heat_list)
             df_heatmap.to_excel(writer, sheet_name="Heatmap", index=False)
 
+            # 5. REBALANCING
             tot = stats['total_assets']
-            rebal_data = [{"Tài Sản": "STOCK", "Tỷ Trọng (%)": (stock_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Lệch (VNĐ)": (0.4*tot) - stock_val}, {"Tài Sản": "CRYPTO", "Tỷ Trọng (%)": (crypto_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Lệch (VNĐ)": (0.4*tot) - crypto_val}, {"Tài Sản": "CASH", "Tỷ Trọng (%)": (stats['wallets']['CASH']['balance']/tot*100) if tot else 0, "Mục Tiêu (%)": 20, "Lệch (VNĐ)": (0.2*tot) - stats['wallets']['CASH']['balance']}]
-            pd.DataFrame(rebal_data).to_excel(writer, sheet_name="Rebalancing", index=False)
+            cash_val = stats['wallets']['CASH']['balance']
+            
+            rebal_data = [
+                {"Tài Sản": "Chứng Khoán (STOCK)", "Tỷ Trọng Hiện Tại (%)": (stock_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Độ Lệch (VNĐ)": (0.4*tot) - stock_val},
+                {"Tài Sản": "Tiền Số (CRYPTO)", "Tỷ Trọng Hiện Tại (%)": (crypto_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Độ Lệch (VNĐ)": (0.4*tot) - crypto_val},
+                {"Tài Sản": "Tiền Mặt (CASH)", "Tỷ Trọng Hiện Tại (%)": (cash_val/tot*100) if tot else 0, "Mục Tiêu (%)": 20, "Độ Lệch (VNĐ)": (0.2*tot) - cash_val}
+            ]
+            for r in rebal_data:
+                d = r["Độ Lệch (VNĐ)"]
+                if d > 500000: r["Khuyến Nghị Hành Động"] = f"Nên MUA thêm / CHUYỂN VÀO {d:,.0f} đ"
+                elif d < -500000: r["Khuyến Nghị Hành Động"] = f"Nên BÁN bớt / RÚT RA {-d:,.0f} đ"
+                else: r["Khuyến Nghị Hành Động"] = "Tuyệt vời! Đang ở mức Cân Bằng"
+            df_rebalance = pd.DataFrame(rebal_data)
+            df_rebalance.to_excel(writer, sheet_name="Rebalancing", index=False)
 
-            w_t = [t['realized_pl'] for t in raw['transactions'] if (t.get('realized_pl') or 0) > 0]
-            l_t = [t['realized_pl'] for t in raw['transactions'] if (t.get('realized_pl') or 0) < 0]
-            avg_w = sum(w_t)/len(w_t) if w_t else 0; avg_l = sum(l_t)/len(l_t) if l_t else 0
-            pd.DataFrame([{"Chỉ Số": "Largest Win", "Giá Trị": max(w_t) if w_t else 0}, {"Chỉ Số": "Largest Loss", "Giá Trị": min(l_t) if l_t else 0}, {"Chỉ Số": "R:R Ratio", "Giá Trị": abs(avg_w/avg_l) if avg_l else 0}]).to_excel(writer, sheet_name="Trade Analytics", index=False)
+            # 6. TRADE ANALYTICS
+            win_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] > 0]
+            loss_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] < 0]
+            
+            max_win = max(win_trades) if win_trades else 0
+            max_loss = min(loss_trades) if loss_trades else 0
+            avg_win = sum(win_trades)/len(win_trades) if win_trades else 0
+            avg_loss = sum(loss_trades)/len(loss_trades) if loss_trades else 0
+            rr_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else (999 if avg_win else 0)
+            
+            rr_eval = "Rất Tốt" if rr_ratio >= 2 else ("Tạm Ổn" if rr_ratio >= 1 else "⚠️ BÁO ĐỘNG: Đang gồng lỗ, chốt non")
+            
+            analytics_data = [
+                {"Chỉ Số Kỹ Thuật": "Cú ăn đậm nhất (Largest Win)", "Giá Trị (VNĐ/Lần)": max_win, "Đánh Giá": "Đỉnh cao!" if max_win > 0 else "Chưa có"},
+                {"Chỉ Số Kỹ Thuật": "Cú cắt lỗ đau nhất (Largest Loss)", "Giá Trị (VNĐ/Lần)": max_loss, "Đánh Giá": "Cần kiểm soát rủi ro" if max_loss < -5000000 else "An toàn"},
+                {"Chỉ Số Kỹ Thuật": "Trung bình mỗi lần Ăn (Average Win)", "Giá Trị (VNĐ/Lần)": avg_win, "Đánh Giá": ""},
+                {"Chỉ Số Kỹ Thuật": "Trung bình mỗi lần Thua (Average Loss)", "Giá Trị (VNĐ/Lần)": avg_loss, "Đánh Giá": ""},
+                {"Chỉ Số Kỹ Thuật": "Tỷ lệ Lợi nhuận / Rủi ro (R:R Ratio)", "Giá Trị (VNĐ/Lần)": rr_ratio, "Đánh Giá": rr_eval}
+            ]
+            df_analytics = pd.DataFrame(analytics_data)
+            df_analytics.to_excel(writer, sheet_name="Trade Analytics", index=False)
 
             # ==========================================
             # FORMAT EXCEL AUTO BY OPENPYXL
@@ -380,61 +411,139 @@ class ReportModule:
             wb = writer.book
             ws_dash = wb["Dashboard"]
             
+            for col_str in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
+                ws_dash.column_dimensions[col_str].width = 22
+
+            for row in ws_dash.iter_rows(min_row=2, max_row=25):
+                for cell in row:
+                    if isinstance(cell.value, (int, float)):
+                        cell.number_format = '#,##0'
+
             green_fill = PatternFill(start_color='E6F4EA', end_color='E6F4EA', fill_type='solid')
             green_font = Font(color='137333', bold=True)
             red_fill = PatternFill(start_color='FCE8E6', end_color='FCE8E6', fill_type='solid')
             red_font = Font(color='C5221F', bold=True)
             rule_green = CellIsRule(operator='greaterThan', formula=['0'], stopIfTrue=True, font=green_font, fill=green_fill)
             rule_red = CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, font=red_font, fill=red_fill)
-            heatmap_rule = ColorScaleRule(start_type='min', start_color='FCE8E6', mid_type='num', mid_value=0, mid_color='FFFFFF', end_type='max', end_color='E6F4EA')
+            
+            heatmap_rule = ColorScaleRule(start_type='min', start_color='FCE8E6',
+                                          mid_type='num', mid_value=0, mid_color='FFFFFF',
+                                          end_type='max', end_color='E6F4EA')
 
             try:
                 chart_io = self._generate_nav_chart_io(stats, raw)
-                ws_dash.add_image(ExcelImage(chart_io), "H1") 
+                img = ExcelImage(chart_io)
+                ws_dash.add_image(img, "H1") 
             except: pass
 
-            for name in wb.sheetnames:
-                ws = wb[name]
-                # Tự động dãn cột 22 như code gốc
-                for col in range(1, ws.max_column + 1):
-                    ws.column_dimensions[get_column_letter(col)].width = 22
+            try:
+                pie = PieChart()
+                pie.title = "Phân Bổ Tỷ Trọng Vốn"
+                labels = Reference(ws_dash, min_col=1, min_row=12, max_row=13)
+                data = Reference(ws_dash, min_col=2, min_row=11, max_row=13)
+                pie.add_data(data, titles_from_data=True)
+                pie.set_categories(labels)
+                ws_dash.add_chart(pie, "B21") 
+            except: pass
+
+            # Áp dụng format cho TẤT CẢ các sheet phụ
+            sheets_to_format = [
+                ("Portfolio", df_port), ("Performance", df_perf), 
+                ("Sổ Cái (All)", df_ledger), ("LS Nạp Rút", df_cash), 
+                ("LS Chứng Khoán", df_stock), ("LS Crypto", df_crypto),
+                ("Heatmap", df_heatmap), ("Rebalancing", df_rebalance), ("Trade Analytics", df_analytics)
+            ]
+
+            for sheet_name, df in sheets_to_format:
+                ws = wb[sheet_name]
                 
-                # Logic chèn Summary Báo cáo vào 3 sheet lịch sử
-                if name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"]:
-                    w_k = "STOCK" if "Chứng Khoán" in name else ("CRYPTO" if "Crypto" in name else "CASH")
+                # CHÈN SUMMARY BLOCK CHO CÁC SHEET LỊCH SỬ CHUYÊN BIỆT
+                if sheet_name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"]:
+                    w_k = "STOCK" if "Chứng Khoán" in sheet_name else ("CRYPTO" if "Crypto" in sheet_name else "CASH")
                     w_d = stats['wallets'].get(w_k, {})
-                    ws['A1'] = f"📑 BÁO CÁO TÀI CHÍNH: {name.upper()}"; ws['A1'].font = Font(bold=True, size=14)
+                    
+                    # Header Summary
+                    ws['A1'] = f"📑 BÁO CÁO TÀI CHÍNH: {sheet_name.split()[-1].upper()}"
+                    ws['A1'].font = Font(bold=True, size=14)
                     
                     if w_k != "CASH":
-                        cur_v = w_d['assets'] + w_d['balance']
-                        cap_v = w_d['total_in'] - w_d['total_out']
-                        pl_v = w_d['realized'] + w_d['unrealized']
-                        sums = [f"💰 Tổng giá trị: {format_currency(cur_v)}", f"💵 Tổng vốn gốc: {format_currency(cap_v)}", f"📈 Lãi/Lỗ: {format_currency(pl_v)}", f"📤 Nạp: {format_currency(w_d['total_in'])} | 📥 Rút: {format_currency(w_d['total_out'])}"]
+                        total_v = w_d['assets'] + w_d['balance']
+                        total_cap = w_d['total_in'] - w_d['total_out']
+                        pnl = w_d['realized'] + w_d['unrealized']
+                        pnl_pct = (pnl / total_cap * 100) if total_cap > 0 else 0
+                        
+                        summary_lines = [
+                            f"💰 Tổng giá trị: {format_currency(total_v)}",
+                            f"💵 Tổng vốn gốc: {format_currency(total_cap)}",
+                            f"📈 Lãi/Lỗ: {format_currency(pnl)} ({pnl_pct:.1f}%)",
+                            f"📤 Nạp: {format_currency(w_d['total_in'])} | 📥 Rút: {format_currency(w_d['total_out'])}"
+                        ]
                     else:
-                        sums = [f"💰 Tổng tài sản HT: {format_currency(stats['total_assets'])}", f"📤 Tổng nạp HT: {format_currency(stats['total_in'])}", f"📥 Tổng rút HT: {format_currency(stats['total_out'])}", f"📈 Lãi/Lỗ tổng: {format_currency(stats['total_pl'])}"]
-                    for i, l in enumerate(sums): ws[f'A{i+3}'] = l
+                        summary_lines = [
+                            f"💰 Tổng tài sản HT: {format_currency(stats['total_assets'])}",
+                            f"📤 Tổng nạp HT: {format_currency(stats['total_in'])}",
+                            f"📥 Tổng rút HT: {format_currency(stats['total_out'])}",
+                            f"📈 Lãi/Lỗ tổng: {format_currency(stats['total_pl'])}"
+                        ]
                     
-                    last = ws.max_row
-                    if last >= 17:
-                        tab = Table(displayName=f"Tbl_{w_k}_{name[:3]}", ref=f"A17:{get_column_letter(ws.max_column)}{last}")
-                        tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True); ws.add_table(tab)
-                        ws.conditional_formatting.add(f"H18:H{last}", rule_green); ws.conditional_formatting.add(f"H18:H{last}", rule_red)
-                
-                # Các định dạng số cho toàn bộ cell
-                for row in ws.iter_rows(min_row=2):
+                    for i, line in enumerate(summary_lines):
+                        ws[f'A{i+3}'] = line
+                        ws[f'A{i+3}'].font = Font(size=11)
+
+                # Dãn cột 22 chuẩn sếp yêu cầu
+                for i, col in enumerate(df.columns):
+                    col_letter = get_column_letter(i + 1)
+                    ws.column_dimensions[col_letter].width = 22
+                    
+                start_row = 17 if sheet_name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"] else 1
+                for row in ws.iter_rows(min_row=start_row + 1):
                     for cell in row:
-                        if isinstance(cell.value, (int, float)): cell.number_format = '#,##0'
-
-                # Conditional formatting cho các sheet khác
-                if name == "Portfolio":
-                    ws.conditional_formatting.add("G2:G1000", rule_green); ws.conditional_formatting.add("G2:G1000", rule_red)
-                elif name == "Heatmap":
+                        if isinstance(cell.value, (int, float)):
+                            cell.number_format = '#,##0' 
+                
+                # Áp dụng màu Lãi/Lỗ
+                if sheet_name == "Portfolio":
+                    ws.conditional_formatting.add("G2:G1000", rule_green)
+                    ws.conditional_formatting.add("G2:G1000", rule_red)
+                elif sheet_name == "Performance":
+                    ws.conditional_formatting.add("C2:C1000", rule_green)
+                    ws.conditional_formatting.add("C2:C1000", rule_red)
+                elif sheet_name in ["Sổ Cái (All)", "LS Nạp Rút", "LS Chứng Khoán", "LS Crypto"]:
+                    cf_range = f"H18:H5000" if start_row == 17 else "H2:H5000"
+                    ws.conditional_formatting.add(cf_range, rule_green)
+                    ws.conditional_formatting.add(cf_range, rule_red)
+                elif sheet_name == "Heatmap":
                     ws.conditional_formatting.add("B2:M100", heatmap_rule)
+                elif sheet_name == "Rebalancing":
+                    ws.conditional_formatting.add("D2:D10", rule_green)
+                    ws.conditional_formatting.add("D2:D10", rule_red)
+                elif sheet_name == "Trade Analytics":
+                    ws.conditional_formatting.add("B2:B10", rule_green)
+                    ws.conditional_formatting.add("B2:B10", rule_red)
+                
+                try:
+                    header_row = start_row
+                    max_row = header_row + 1 if df.empty or str(df.iloc[0,0]) == "" else header_row + df.shape[0]
+                    ref = f"A{header_row}:{get_column_letter(len(df.columns))}{max_row}"
+                    tbl_name = f"Tbl_{sheet_name.replace(' ', '_').replace('(', '').replace(')', '')}"
+                    tab = Table(displayName=tbl_name[:30], ref=ref)
+                    tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                    ws.add_table(tab)
+                except: pass
 
-            # Đóng khung các bảng còn lại
             try:
-                ws_dash.add_table(Table(displayName="Tbl_Dash", ref=f"A1:B8", tableStyleInfo=TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)))
-                ws_dash.add_table(Table(displayName="Tbl_Matrix", ref=f"A16:E18", tableStyleInfo=TableStyleInfo(name="TableStyleMedium14", showRowStripes=True)))
+                ws_dash.conditional_formatting.add("B6:B6", rule_green)
+                ws_dash.conditional_formatting.add("B6:B6", rule_red)
+                ws_dash.conditional_formatting.add("C17:E18", rule_green)
+                ws_dash.conditional_formatting.add("C17:E18", rule_red)
+                
+                tab1 = Table(displayName="Tbl_Dash", ref=f"A1:B8")
+                tab1.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                ws_dash.add_table(tab1)
+                
+                tab_matrix = Table(displayName="Tbl_Matrix", ref=f"A16:E18")
+                tab_matrix.tableStyleInfo = TableStyleInfo(name="TableStyleMedium14", showRowStripes=True)
+                ws_dash.add_table(tab_matrix)
             except: pass
 
         return output.getvalue()
