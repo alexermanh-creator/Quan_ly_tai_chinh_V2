@@ -14,7 +14,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import PieChart, Reference
 from openpyxl.drawing.image import Image as ExcelImage
-from openpyxl.styles import PatternFill, Font
+from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
 from backend.database.repository import DatabaseRepo
 from backend.utils.formatter import format_currency
@@ -37,7 +37,15 @@ class ReportModule:
                 total_in = w['total_in'] or 0
                 total_out = w['total_out'] or 0
                 total_assets += w['balance'] or 0
-            wallet_stats[wid] = {'balance': w['balance'] or 0, 'assets': 0, 'realized': 0, 'unrealized': 0}
+            # Lưu thêm total_in/out vào stats để làm báo cáo summary
+            wallet_stats[wid] = {
+                'balance': w['balance'] or 0, 
+                'assets': 0, 
+                'realized': 0, 
+                'unrealized': 0,
+                'total_in': w['total_in'] or 0,
+                'total_out': w['total_out'] or 0
+            }
 
         symbol_stats = {}
         for h in data['holdings']:
@@ -55,7 +63,7 @@ class ReportModule:
             total_assets += cur_val
             
             if sym not in symbol_stats:
-                symbol_stats[sym] = {'wallet': wid, 'total_pl': 0}
+                symbol_stats[sym] = {'wallet': wid, 'total_pl': 0, 'val': cur_val}
             symbol_stats[sym]['total_pl'] += unrealized
 
         wins = 0
@@ -74,7 +82,7 @@ class ReportModule:
                 wallet_stats[t['wallet_id']]['realized'] += pl
                 sym = t['symbol']
                 if sym:
-                    if sym not in symbol_stats: symbol_stats[sym] = {'wallet': t['wallet_id'], 'total_pl': 0}
+                    if sym not in symbol_stats: symbol_stats[sym] = {'wallet': t['wallet_id'], 'total_pl': 0, 'val': 0}
                     symbol_stats[sym]['total_pl'] += pl
                 
             if t['type'] == 'BAN' and pl is not None:
@@ -226,8 +234,7 @@ class ReportModule:
         msg += f"🎯 **HIỆU QUẢ ĐẦU TƯ (NAV)**\n"
         msg += f"💰 Tổng tài sản: {format_currency(stats['total_assets'])}\n"
         msg += f"📈 Lãi/Lỗ tổng: {sign}{format_currency(stats['total_pl'])} ({pl_icon} {sign}{nav_roi:.1f}%)\n"
-        if stats['total_assets'] > 0:
-            msg += f"🏁 Tiến độ mục tiêu: Đạt {goal_progress:.1f}% ({goal_text})\n"
+        msg += f"🏁 Tiến độ mục tiêu: Đạt {goal_progress:.1f}% ({goal_text})\n"
         msg += f"⚖️ Win Rate: {stats['win_rate']:.1f}% ({stats['wins']} Lãi / {stats['losses']} Lỗ)\n"
         msg += f"📉 Max Drawdown: -{stats['max_drawdown']:.1f}%\n"
         msg += f"────────────\n"
@@ -244,12 +251,8 @@ class ReportModule:
         msg += f"🔍 **LỢI NHUẬN ĐẾN TỪ ĐÂU?**\n"
         msg += f"💵 Lãi đã chốt (Tiền về ví): {format_currency(stats['total_realized'])}\n"
         msg += f"📄 Lãi trên giấy (Chưa chốt): {format_currency(stats['total_unrealized'])}\n"
-        if stats['top_winners']:
-            msg += f"🏆 **Top Công Thần:**\n"
-            for sym, data in stats['top_winners']:
-                msg += f"• {sym} ({data['wallet']}): 🟢 +{format_currency(data['total_pl'])}\n"
         msg += f"────────────\n"
-        
+
         if stats['top_losers']:
             msg += f"⚠️ **TÀI SẢN KÉO LÙI DANH MỤC**\n"
             for sym, data in stats['top_losers']:
@@ -318,7 +321,7 @@ class ReportModule:
             df_perf = pd.DataFrame(perf_list, columns=perf_cols) if perf_list else pd.DataFrame([[""]*len(perf_cols)], columns=perf_cols)
             df_perf.to_excel(writer, sheet_name="Performance", index=False)
 
-            # 3. TÁCH CÁC SHEET LỊCH SỬ (LEDGER, NẠP RÚT, STOCK, CRYPTO)
+            # 3. TÁCH CÁC SHEET LỊCH SỬ (BẮT ĐẦU TỪ DÒNG 17 ĐỂ CHỪA CHỖ CHO SUMMARY)
             ledger_cols = ["ID", "Loại", "Ví", "Mã", "Số Lượng", "Giá", "Thành Tiền", "Lãi Chốt", "Ghi Chú"]
             transactions = []
             for t in raw['transactions']:
@@ -326,20 +329,18 @@ class ReportModule:
             
             df_ledger = pd.DataFrame(transactions, columns=ledger_cols) if transactions else pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
             
-            # Tách dữ liệu
             df_cash = df_ledger[df_ledger['Ví'] == 'CASH'] if not df_ledger.empty else pd.DataFrame()
             df_stock = df_ledger[df_ledger['Ví'] == 'STOCK'] if not df_ledger.empty else pd.DataFrame()
             df_crypto = df_ledger[df_ledger['Ví'] == 'CRYPTO'] if not df_ledger.empty else pd.DataFrame()
 
-            # Đảm bảo không bị trống cột nếu rỗng
             if df_cash.empty: df_cash = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
             if df_stock.empty: df_stock = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
             if df_crypto.empty: df_crypto = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
 
             df_ledger.to_excel(writer, sheet_name="Sổ Cái (All)", index=False)
-            df_cash.to_excel(writer, sheet_name="LS Nạp Rút", index=False)
-            df_stock.to_excel(writer, sheet_name="LS Chứng Khoán", index=False)
-            df_crypto.to_excel(writer, sheet_name="LS Crypto", index=False)
+            df_cash.to_excel(writer, sheet_name="LS Nạp Rút", index=False, startrow=16)
+            df_stock.to_excel(writer, sheet_name="LS Chứng Khoán", index=False, startrow=16)
+            df_crypto.to_excel(writer, sheet_name="LS Crypto", index=False, startrow=16)
 
             # 4. HEATMAP
             heat_dict = {}
@@ -445,7 +446,7 @@ class ReportModule:
                 ws_dash.add_chart(pie, "B21") 
             except: pass
 
-            # Áp dụng format cho TẤT CẢ các sheet phụ (Bao gồm cả 3 sheet lịch sử mới)
+            # Áp dụng format cho TẤT CẢ các sheet phụ
             sheets_to_format = [
                 ("Portfolio", df_port), ("Performance", df_perf), 
                 ("Sổ Cái (All)", df_ledger), ("LS Nạp Rút", df_cash), 
@@ -455,10 +456,47 @@ class ReportModule:
 
             for sheet_name, df in sheets_to_format:
                 ws = wb[sheet_name]
+                
+                # CHÈN SUMMARY BLOCK CHO CÁC SHEET LỊCH SỬ CHUYÊN BIỆT
+                if sheet_name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"]:
+                    w_k = "STOCK" if "Chứng Khoán" in sheet_name else ("CRYPTO" if "Crypto" in sheet_name else "CASH")
+                    w_d = stats['wallets'].get(w_k, {})
+                    
+                    # Header Summary
+                    ws['A1'] = f"📑 BÁO CÁO TÀI CHÍNH: {sheet_name.split()[-1].upper()}"
+                    ws['A1'].font = Font(bold=True, size=14)
+                    
+                    if w_k != "CASH":
+                        total_v = w_d['assets'] + w_d['balance']
+                        total_cap = w_d['total_in'] - w_d['total_out']
+                        pnl = w_d['realized'] + w_d['unrealized']
+                        pnl_pct = (pnl / total_cap * 100) if total_cap > 0 else 0
+                        
+                        summary_lines = [
+                            f"💰 Tổng giá trị: {format_currency(total_v)}",
+                            f"💵 Tổng vốn gốc: {format_currency(total_cap)}",
+                            f"📈 Lãi/Lỗ: {format_currency(pnl)} ({pnl_pct:.1f}%)",
+                            f"📤 Nạp: {format_currency(w_d['total_in'])} | 📥 Rút: {format_currency(w_d['total_out'])}"
+                        ]
+                    else:
+                        summary_lines = [
+                            f"💰 Tổng tài sản HT: {format_currency(stats['total_assets'])}",
+                            f"📤 Tổng nạp HT: {format_currency(stats['total_in'])}",
+                            f"📥 Tổng rút HT: {format_currency(stats['total_out'])}",
+                            f"📈 Lãi/Lỗ tổng: {format_currency(stats['total_pl'])}"
+                        ]
+                    
+                    for i, line in enumerate(summary_lines):
+                        ws[f'A{i+3}'] = line
+                        ws[f'A{i+3}'].font = Font(size=11)
+
+                # Dãn cột 22 chuẩn sếp yêu cầu
                 for i, col in enumerate(df.columns):
                     col_letter = get_column_letter(i + 1)
-                    ws.column_dimensions[col_letter].width = 22 if sheet_name in ["Rebalancing", "Trade Analytics"] else 15
-                for row in ws.iter_rows(min_row=2):
+                    ws.column_dimensions[col_letter].width = 22
+                    
+                start_row = 17 if sheet_name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"] else 1
+                for row in ws.iter_rows(min_row=start_row + 1):
                     for cell in row:
                         if isinstance(cell.value, (int, float)):
                             cell.number_format = '#,##0' 
@@ -471,8 +509,9 @@ class ReportModule:
                     ws.conditional_formatting.add("C2:C1000", rule_green)
                     ws.conditional_formatting.add("C2:C1000", rule_red)
                 elif sheet_name in ["Sổ Cái (All)", "LS Nạp Rút", "LS Chứng Khoán", "LS Crypto"]:
-                    ws.conditional_formatting.add("H2:H5000", rule_green)
-                    ws.conditional_formatting.add("H2:H5000", rule_red)
+                    cf_range = f"H18:H5000" if start_row == 17 else "H2:H5000"
+                    ws.conditional_formatting.add(cf_range, rule_green)
+                    ws.conditional_formatting.add(cf_range, rule_red)
                 elif sheet_name == "Heatmap":
                     ws.conditional_formatting.add("B2:M100", heatmap_rule)
                 elif sheet_name == "Rebalancing":
@@ -483,11 +522,11 @@ class ReportModule:
                     ws.conditional_formatting.add("B2:B10", rule_red)
                 
                 try:
-                    max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
-                    ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
-                    # Thay thế dấu cách trong tên table để tránh lỗi Excel
+                    header_row = start_row
+                    max_row = header_row + 1 if df.empty or str(df.iloc[0,0]) == "" else header_row + df.shape[0]
+                    ref = f"A{header_row}:{get_column_letter(len(df.columns))}{max_row}"
                     tbl_name = f"Tbl_{sheet_name.replace(' ', '_').replace('(', '').replace(')', '')}"
-                    tab = Table(displayName=tbl_name, ref=ref)
+                    tab = Table(displayName=tbl_name[:30], ref=ref)
                     tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
                     ws.add_table(tab)
                 except: pass
