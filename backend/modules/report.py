@@ -2,9 +2,11 @@
 import pandas as pd
 import io
 import re
+import datetime
 import matplotlib
-matplotlib.use('Agg') # Cấu hình vẽ ảnh ngầm trên server
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
@@ -99,45 +101,58 @@ class ReportModule:
         }
 
     def _generate_nav_chart_io(self, stats, raw):
-        """Hàm dùng chung để vẽ biểu đồ cho cả Telegram và Excel"""
         capital_history = []
+        date_history = []
         current_calc_capital = 0
+        
         transactions = sorted(raw['transactions'], key=lambda x: x['id'])
         
         for t in transactions:
             if t['type'] in ['NAP', 'RUT'] and t['wallet_id'] == 'CASH':
                 current_calc_capital += (t['amount'] or 0)
                 capital_history.append(current_calc_capital)
+                
+                # Trích xuất ngày từ note (VD: [2024-01-15]), nếu không có thì lấy ngày hôm nay
+                tx_date = datetime.date.today()
+                if t.get('note'):
+                    match = re.search(r'\[(\d{4}-\d{2}-\d{2})\]', str(t['note']))
+                    if match:
+                        tx_date = datetime.datetime.strptime(match.group(1), '%Y-%m-%d').date()
+                date_history.append(tx_date)
 
-        # Cân bằng mốc lịch sử với số Vốn nạp ròng hiện tại của hệ thống (Tránh bị đường thẳng ở số 0)
-        diff = stats['net_cashflow'] - (capital_history[-1] if capital_history else 0)
-        
         if not capital_history:
             capital_history = [stats['net_cashflow']]
-        else:
-            capital_history = [val + diff for val in capital_history]
+            date_history = [datetime.date.today()]
 
+        # Cân bằng mốc Neo (Để đường nạp ròng khớp với tiền thật hiện tại)
+        diff = stats['net_cashflow'] - capital_history[-1]
+        capital_history = [val + diff for val in capital_history]
+
+        # Nếu chỉ có 1 điểm giao dịch, tạo thêm 1 điểm lùi lại 30 ngày để vẽ thành đường thẳng
         if len(capital_history) == 1:
-            capital_history = [capital_history[0], capital_history[0]]
+            capital_history.insert(0, capital_history[0])
+            date_history.insert(0, date_history[0] - datetime.timedelta(days=30))
 
-        x_points = range(len(capital_history))
-
-        plt.figure(figsize=(9, 4.5))
+        # Khởi tạo biểu đồ
+        fig, ax = plt.subplots(figsize=(10, 5))
         
-        # Thêm hiệu ứng Fill area (Đổ bóng màu xanh) giống V1
-        plt.fill_between(x_points, capital_history, color='#1f77b4', alpha=0.15)
-        plt.plot(x_points, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng (Net Invested)', linewidth=2)
+        # Vẽ đường & đổ bóng
+        ax.fill_between(date_history, capital_history, color='#1f77b4', alpha=0.15)
+        ax.plot(date_history, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2)
 
+        # Vẽ Tài sản hiện có (Chấm đỏ)
         current_assets = stats['total_assets']
-        last_x = x_points[-1]
+        last_date = date_history[-1]
 
-        plt.plot([last_x, last_x], [capital_history[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
-        plt.plot(last_x, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
+        ax.plot([last_date, last_date], [capital_history[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
+        ax.plot(last_date, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
+
+        # Format X-axis thành Thời gian (Tháng/Năm)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%Y'))
+        fig.autofmt_xdate()
 
         plt.title('BIỂU ĐỒ BIẾN ĐỘNG VỐN & TÀI SẢN (NAV)', fontsize=13, fontweight='bold', pad=15)
         plt.ylabel('Giá trị (VNĐ)', fontsize=11)
-        plt.xticks([]) # Ẩn trục X vì đang dùng Index, không có Date
-        plt.xlabel('Tiến trình thời gian (Theo các lệnh giao dịch)', fontsize=10, style='italic')
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.legend(loc='upper left')
 
@@ -146,7 +161,7 @@ class ReportModule:
             elif abs(value) >= 1_000_000: return f"{value / 1_000_000:.0f} Tr"
             return f"{value:,.0f}"
 
-        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(format_func))
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(format_func))
         plt.tight_layout()
 
         buf = io.BytesIO()
@@ -277,26 +292,26 @@ class ReportModule:
             wb = writer.book
             ws_dash = wb["Dashboard"]
             
-            # --- Nhúng biểu đồ NAV dạng Ảnh vào Excel ---
+            # QUY HOẠCH LẠI TỌA ĐỘ TRÁNH ĐÈ NHAU
             try:
+                # Ảnh Line Chart chèn hẳn sang cột I (I1)
                 chart_io = self._generate_nav_chart_io(stats, raw)
                 img = ExcelImage(chart_io)
-                ws_dash.add_image(img, "F1") # Đặt ảnh biểu đồ bắt đầu từ ô F1
-            except Exception as e:
-                pass # Bỏ qua nếu lỗi thư viện ảnh
+                ws_dash.add_image(img, "I1") 
+            except: pass
 
-            # --- Vẽ Biểu Đồ Tròn (Pie Chart) ---
             try:
+                # Biểu đồ Tròn chèn vào cột D (D1)
                 pie = PieChart()
                 pie.title = "Phân Bổ Tỷ Trọng Vốn"
                 labels = Reference(ws_dash, min_col=1, min_row=10, max_row=11)
                 data = Reference(ws_dash, min_col=2, min_row=9, max_row=11)
                 pie.add_data(data, titles_from_data=True)
                 pie.set_categories(labels)
-                ws_dash.add_chart(pie, "D13") # Dịch Pie chart xuống dưới một chút
+                ws_dash.add_chart(pie, "D1") 
             except: pass
 
-            # --- Format Số & Bảng ---
+            # Format Số & Bảng
             for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
                 ws = wb[sheet_name]
                 
