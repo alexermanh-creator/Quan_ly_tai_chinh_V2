@@ -57,13 +57,27 @@ def show_group_report(message):
         bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 # ==========================================
-# MODULE REPORT & XUẤT EXCEL (ĐÃ THÊM TRY-EXCEPT)
+# MODULE REPORT & XUẤT EXCEL / CHART
 # ==========================================
 @bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
 def show_overall_report(message):
     bot.send_message(message.chat.id, "⏳ Đang tổng hợp số liệu danh mục...", parse_mode="Markdown")
     msg, markup = report_mod.get_telegram_report()
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'view_nav_chart')
+def handle_view_chart(call):
+    bot.answer_callback_query(call.id, "⏳ Đang vẽ biểu đồ. Sếp đợi vài giây nhé...")
+    try:
+        chart_bytes = report_mod.generate_chart_bytes()
+        bot.send_photo(
+            call.message.chat.id, 
+            photo=chart_bytes, 
+            caption="📈 **BIỂU ĐỒ VỐN NẠP RÒNG & TÀI SẢN THỰC TẾ**\nKhoảng cách giữa điểm màu đỏ và đường màu xanh chính là Lãi/Lỗ hiện tại của Sếp!",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"❌ Lỗi khi vẽ biểu đồ: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: call.data == 'export_excel_report')
 def handle_export_excel(call):
@@ -92,7 +106,7 @@ def handle_docs(message):
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
 # ==========================================
-# MODULE LỊCH SỬ 
+# MODULE LỊCH SỬ
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
 def show_history(message):
