@@ -9,7 +9,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import PieChart, Reference
-from openpyxl.styles import numbers
+from openpyxl.drawing.image import Image as ExcelImage
 from backend.database.repository import DatabaseRepo
 from backend.utils.formatter import format_currency
 
@@ -98,6 +98,69 @@ class ReportModule:
             "raw_data": data
         }
 
+    def _generate_nav_chart_io(self, stats, raw):
+        """Hàm dùng chung để vẽ biểu đồ cho cả Telegram và Excel"""
+        capital_history = []
+        current_calc_capital = 0
+        transactions = sorted(raw['transactions'], key=lambda x: x['id'])
+        
+        for t in transactions:
+            if t['type'] in ['NAP', 'RUT'] and t['wallet_id'] == 'CASH':
+                current_calc_capital += (t['amount'] or 0)
+                capital_history.append(current_calc_capital)
+
+        # Cân bằng mốc lịch sử với số Vốn nạp ròng hiện tại của hệ thống (Tránh bị đường thẳng ở số 0)
+        diff = stats['net_cashflow'] - (capital_history[-1] if capital_history else 0)
+        
+        if not capital_history:
+            capital_history = [stats['net_cashflow']]
+        else:
+            capital_history = [val + diff for val in capital_history]
+
+        if len(capital_history) == 1:
+            capital_history = [capital_history[0], capital_history[0]]
+
+        x_points = range(len(capital_history))
+
+        plt.figure(figsize=(9, 4.5))
+        
+        # Thêm hiệu ứng Fill area (Đổ bóng màu xanh) giống V1
+        plt.fill_between(x_points, capital_history, color='#1f77b4', alpha=0.15)
+        plt.plot(x_points, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng (Net Invested)', linewidth=2)
+
+        current_assets = stats['total_assets']
+        last_x = x_points[-1]
+
+        plt.plot([last_x, last_x], [capital_history[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
+        plt.plot(last_x, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
+
+        plt.title('BIỂU ĐỒ BIẾN ĐỘNG VỐN & TÀI SẢN (NAV)', fontsize=13, fontweight='bold', pad=15)
+        plt.ylabel('Giá trị (VNĐ)', fontsize=11)
+        plt.xticks([]) # Ẩn trục X vì đang dùng Index, không có Date
+        plt.xlabel('Tiến trình thời gian (Theo các lệnh giao dịch)', fontsize=10, style='italic')
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend(loc='upper left')
+
+        def format_func(value, tick_number):
+            if abs(value) >= 1_000_000_000: return f"{value / 1_000_000_000:.1f} Tỷ"
+            elif abs(value) >= 1_000_000: return f"{value / 1_000_000:.0f} Tr"
+            return f"{value:,.0f}"
+
+        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(format_func))
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=120)
+        plt.close()
+        buf.seek(0)
+        return buf
+
+    def generate_chart_bytes(self):
+        stats = self._process_data()
+        raw = stats['raw_data']
+        buf = self._generate_nav_chart_io(stats, raw)
+        return buf.getvalue()
+
     def get_telegram_report(self):
         stats = self._process_data()
         
@@ -163,7 +226,7 @@ class ReportModule:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             
-            # 1. Dashboard & Bảng Phân bổ để vẽ biểu đồ
+            # 1. Dashboard
             overview_data = {
                 "Chỉ Số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)"],
                 "Giá Trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate']]
@@ -177,7 +240,7 @@ class ReportModule:
             df_alloc = pd.DataFrame(alloc_data)
             df_alloc.to_excel(writer, sheet_name="Dashboard", index=False, startrow=len(df_dash) + 2)
 
-            # 2. Portfolio
+            # 2. Portfolio 
             port_cols = ["Ví", "Mã", "Số Lượng", "Giá Vốn TB", "Giá Hiện Tại", "Vốn Gốc VNĐ", "Lãi/Lỗ Tạm Tính"]
             portfolio = []
             for h in raw['holdings']:
@@ -212,16 +275,26 @@ class ReportModule:
             # FORMAT EXCEL TỰ ĐỘNG BẰNG OPENPYXL
             # ==========================================
             wb = writer.book
-            
-            # --- Vẽ Biểu Đồ Tròn (Pie Chart) ---
             ws_dash = wb["Dashboard"]
-            pie = PieChart()
-            pie.title = "Phân Bổ Tỷ Trọng Vốn"
-            labels = Reference(ws_dash, min_col=1, min_row=10, max_row=11)
-            data = Reference(ws_dash, min_col=2, min_row=9, max_row=11)
-            pie.add_data(data, titles_from_data=True)
-            pie.set_categories(labels)
-            ws_dash.add_chart(pie, "D2") 
+            
+            # --- Nhúng biểu đồ NAV dạng Ảnh vào Excel ---
+            try:
+                chart_io = self._generate_nav_chart_io(stats, raw)
+                img = ExcelImage(chart_io)
+                ws_dash.add_image(img, "F1") # Đặt ảnh biểu đồ bắt đầu từ ô F1
+            except Exception as e:
+                pass # Bỏ qua nếu lỗi thư viện ảnh
+
+            # --- Vẽ Biểu Đồ Tròn (Pie Chart) ---
+            try:
+                pie = PieChart()
+                pie.title = "Phân Bổ Tỷ Trọng Vốn"
+                labels = Reference(ws_dash, min_col=1, min_row=10, max_row=11)
+                data = Reference(ws_dash, min_col=2, min_row=9, max_row=11)
+                pie.add_data(data, titles_from_data=True)
+                pie.set_categories(labels)
+                ws_dash.add_chart(pie, "D13") # Dịch Pie chart xuống dưới một chút
+            except: pass
 
             # --- Format Số & Bảng ---
             for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
@@ -255,50 +328,3 @@ class ReportModule:
                     pass
 
         return output.getvalue()
-
-    def generate_chart_bytes(self):
-        stats = self._process_data()
-        raw = stats['raw_data']
-
-        net_capital = 0
-        capital_history = [0]
-        
-        transactions = sorted(raw['transactions'], key=lambda x: x['id'])
-        for t in transactions:
-            if t['wallet_id'] == 'CASH' and t['type'] in ['NAP', 'RUT']:
-                net_capital += (t['amount'] if t['amount'] else 0)
-                capital_history.append(net_capital)
-
-        if len(capital_history) == 1:
-            capital_history.append(net_capital)
-
-        x_points = range(len(capital_history))
-
-        plt.figure(figsize=(10, 5))
-        plt.plot(x_points, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn thực nạp ròng', linewidth=2)
-
-        current_assets = stats['total_assets']
-        last_x = x_points[-1]
-
-        plt.plot([last_x, last_x], [net_capital, current_assets], color='#d62728', linestyle='--', linewidth=2)
-        plt.plot(last_x, current_assets, marker='o', color='#d62728', markersize=8, label='Tài sản thực hiện có')
-
-        plt.title('BIỂU ĐỒ BIẾN ĐỘNG VỐN & TÀI SẢN (NAV)', fontsize=14, fontweight='bold', pad=15)
-        plt.ylabel('Giá trị (VNĐ)', fontsize=12)
-        plt.xlabel('Trục thời gian (Theo tiến trình giao dịch Nạp/Rút)', fontsize=10, style='italic')
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.legend(loc='upper left')
-
-        def format_func(value, tick_number):
-            if abs(value) >= 1_000_000_000: return f"{value / 1_000_000_000:.1f} Tỷ"
-            elif abs(value) >= 1_000_000: return f"{value / 1_000_000:.0f} Tr"
-            return f"{value:,.0f}"
-
-        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(format_func))
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150)
-        plt.close()
-        buf.seek(0)
-        return buf.getvalue()
