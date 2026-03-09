@@ -109,7 +109,6 @@ class ReportModule:
         except: pass
         goal_progress = (nav_roi / goal_pct * 100) if goal_pct > 0 else 0
         
-        # Format UI đã bỏ số đếm
         msg = f"📊 **BÁO CÁO QUẢN TRỊ DANH MỤC**\n━━━━━━━━━━━━━━━━━━━\n"
         msg += f"🎯 **HIỆU QUẢ ĐẦU TƯ (NAV)**\n"
         msg += f"💰 Tổng tài sản: {format_currency(stats['total_assets'])}\n"
@@ -119,7 +118,6 @@ class ReportModule:
         msg += f"⚖️ Win Rate: {stats['win_rate']:.1f}% ({stats['wins']} Lãi / {stats['losses']} Lỗ)\n"
         msg += f"────────────\n"
         
-        # Phân bổ
         msg += f"⚖️ **PHÂN BỔ TỶ TRỌNG & HIỆU SUẤT**\n"
         for wid in ['STOCK', 'CRYPTO']:
             w_assets = stats['wallets'][wid]['assets'] + stats['wallets'][wid]['balance']
@@ -129,7 +127,6 @@ class ReportModule:
             msg += f"• {wid}: {format_currency(w_assets)} ({pct:.1f}%) | Hiệu suất: {w_icon}\n"
         msg += f"────────────\n"
         
-        # Dòng tiền
         msg += f"🔍 **LỢI NHUẬN ĐẾN TỪ ĐÂU?**\n"
         msg += f"💵 Lãi đã chốt (Tiền về ví): {format_currency(stats['total_realized'])}\n"
         msg += f"📄 Lãi trên giấy (Chưa chốt): {format_currency(stats['total_unrealized'])}\n"
@@ -177,7 +174,7 @@ class ReportModule:
             df_port = pd.DataFrame(portfolio) if portfolio else pd.DataFrame({"Mã": ["Chưa có dữ liệu"]})
             df_port.to_excel(writer, sheet_name="Portfolio", index=False)
 
-            # 3. Performance (NEW - Dữ liệu Lãi/Lỗ thực tế đã chốt)
+            # 3. Performance
             perf_dict = {}
             for t in raw['transactions']:
                 if t['type'] == 'BAN' and t['realized_pl'] is not None and t['symbol']:
@@ -202,27 +199,29 @@ class ReportModule:
             df_ledger = pd.DataFrame(transactions) if transactions else pd.DataFrame({"ID": ["Chưa có dữ liệu"]})
             df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
 
-            # --- TỰ ĐỘNG FORMAT BẢNG & ĐỘ RỘNG CỘT BẰNG OPENPYXL ---
-            wb = writer.book
-            for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
-                ws = wb[sheet_name]
-                
-                # Căn chỉnh độ rộng cột tự động
-                for i, col in enumerate(df.columns):
-                    col_letter = get_column_letter(i + 1)
-                    # Tìm chuỗi dài nhất trong cột hoặc tiêu đề
-                    max_len = max(df[col].astype(str).map(len).max() if not df.empty else 0, len(str(col))) + 4
-                    ws.column_dimensions[col_letter].width = max_len
-                
-                # Bọc Data thành định dạng Table chuẩn Excel
-                if not df.empty and df.columns[0] not in ["Chưa có dữ liệu", "Mã", "ID"] or (df.shape[0] > 0 and len(df.columns) > 1):
-                    max_row, max_col = df.shape
-                    ref = f"A1:{get_column_letter(max_col)}{max_row + 1}"
-                    tab = Table(displayName=f"Table_{sheet_name}", ref=ref)
-                    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
-                                           showLastColumn=False, showRowStripes=True, showColumnStripes=True)
-                    tab.tableStyleInfo = style
-                    ws.add_table(tab)
+            # --- BỌC LỚP CHỐNG LỖI KHI VẼ BẢNG ---
+            try:
+                wb = writer.book
+                for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
+                    ws = wb[sheet_name]
+                    
+                    # Căn chỉnh độ rộng
+                    for i, col in enumerate(df.columns):
+                        col_letter = get_column_letter(i + 1)
+                        max_len = max(df[col].astype(str).map(len).max() if not df.empty else 0, len(str(col))) + 4
+                        ws.column_dimensions[col_letter].width = min(max_len, 40) # Giới hạn không rộng quá 40
+                    
+                    # Thêm Table nếu có dữ liệu
+                    if not df.empty and df.shape[0] > 0 and len(df.columns) > 1:
+                        if "Chưa có" not in str(df.iloc[0, 0] if not df.empty else ""):
+                            max_row, max_col = df.shape
+                            ref = f"A1:{get_column_letter(max_col)}{max_row + 1}"
+                            tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
+                            style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
+                                                   showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+                            tab.tableStyleInfo = style
+                            ws.add_table(tab)
+            except Exception as e:
+                pass # Nếu lỗi format thì vẫn trả về file Excel trơn, không sập hệ thống
 
-        output.seek(0)
-        return output
+        return output.getvalue() # Trả về chuẩn bytes thay vì object
