@@ -2,9 +2,14 @@
 import pandas as pd
 import io
 import re
+import matplotlib
+matplotlib.use('Agg') # Cấu hình vẽ ảnh ngầm trên server
+import matplotlib.pyplot as plt
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import PieChart, Reference
+from openpyxl.styles import numbers
 from backend.database.repository import DatabaseRepo
 from backend.utils.formatter import format_currency
 
@@ -96,7 +101,6 @@ class ReportModule:
     def get_telegram_report(self):
         stats = self._process_data()
         
-        # NAV & Goal
         pl_icon = "🟢" if stats['total_pl'] >= 0 else "🔴"
         sign = "+" if stats['total_pl'] > 0 else ""
         nav_roi = (stats['total_pl'] / stats['net_cashflow'] * 100) if stats['net_cashflow'] > 0 else 0
@@ -144,8 +148,11 @@ class ReportModule:
             
         msg += f"━━━━━━━━━━━━━━━━━━━"
 
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("📊 Tải Báo Cáo Excel Chi Tiết", callback_data="export_excel_report"))
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            InlineKeyboardButton("📈 Xem Biểu Đồ Tăng Trưởng NAV", callback_data="view_nav_chart"),
+            InlineKeyboardButton("📊 Tải Báo Cáo Excel Chi Tiết", callback_data="export_excel_report")
+        )
         
         return msg, markup
 
@@ -155,26 +162,32 @@ class ReportModule:
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. Dashboard
+            
+            # 1. Dashboard & Bảng Phân bổ để vẽ biểu đồ
             overview_data = {
                 "Chỉ Số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)"],
                 "Giá Trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate']]
             }
             df_dash = pd.DataFrame(overview_data)
-            df_dash.to_excel(writer, sheet_name="Dashboard", index=False)
+            df_dash.to_excel(writer, sheet_name="Dashboard", index=False, startrow=0)
             
+            stock_val = stats['wallets']['STOCK']['assets'] + stats['wallets']['STOCK']['balance']
+            crypto_val = stats['wallets']['CRYPTO']['assets'] + stats['wallets']['CRYPTO']['balance']
+            alloc_data = {"Ví": ["STOCK", "CRYPTO"], "Tài Sản": [stock_val, crypto_val]}
+            df_alloc = pd.DataFrame(alloc_data)
+            df_alloc.to_excel(writer, sheet_name="Dashboard", index=False, startrow=len(df_dash) + 2)
+
             # 2. Portfolio
+            port_cols = ["Ví", "Mã", "Số Lượng", "Giá Vốn TB", "Giá Hiện Tại", "Vốn Gốc VNĐ", "Lãi/Lỗ Tạm Tính"]
             portfolio = []
             for h in raw['holdings']:
-                portfolio.append({
-                    "Ví": h['wallet_id'], "Mã": h['symbol'], "Số Lượng": h['quantity'],
-                    "Giá Vốn TB": h['average_price'], "Giá Hiện Tại": h['current_price'],
-                    "Vốn Gốc VNĐ": h['cost_basis_vnd']
-                })
-            df_port = pd.DataFrame(portfolio) if portfolio else pd.DataFrame({"Mã": ["Chưa có dữ liệu"]})
+                pl = (h['quantity'] * h['current_price'] * (float(raw['settings'].get('crypto_rate', 25000)) if h['wallet_id'] == 'CRYPTO' else 1)) - h['cost_basis_vnd']
+                portfolio.append([h['wallet_id'], h['symbol'], h['quantity'], h['average_price'], h['current_price'], h['cost_basis_vnd'], pl])
+            df_port = pd.DataFrame(portfolio, columns=port_cols) if portfolio else pd.DataFrame([[""]*len(port_cols)], columns=port_cols)
             df_port.to_excel(writer, sheet_name="Portfolio", index=False)
 
             # 3. Performance
+            perf_cols = ["Mã", "Số Lần Bán", "Tổng Lãi/Lỗ Thực Tế"]
             perf_dict = {}
             for t in raw['transactions']:
                 if t['type'] == 'BAN' and t['realized_pl'] is not None and t['symbol']:
@@ -183,45 +196,109 @@ class ReportModule:
                         perf_dict[sym] = {"Số Lần Bán": 0, "Tổng Lãi/Lỗ Thực Tế": 0}
                     perf_dict[sym]["Số Lần Bán"] += 1
                     perf_dict[sym]["Tổng Lãi/Lỗ Thực Tế"] += t['realized_pl']
-            
-            perf_list = [{"Mã": k, "Số Lần Bán": v["Số Lần Bán"], "Tổng Lãi/Lỗ Thực Tế": v["Tổng Lãi/Lỗ Thực Tế"]} for k, v in perf_dict.items()]
-            df_perf = pd.DataFrame(perf_list) if perf_list else pd.DataFrame({"Mã": ["Chưa có dữ liệu"]})
+            perf_list = [[k, v["Số Lần Bán"], v["Tổng Lãi/Lỗ Thực Tế"]] for k, v in perf_dict.items()]
+            df_perf = pd.DataFrame(perf_list, columns=perf_cols) if perf_list else pd.DataFrame([[""]*len(perf_cols)], columns=perf_cols)
             df_perf.to_excel(writer, sheet_name="Performance", index=False)
 
             # 4. Ledger
+            ledger_cols = ["ID", "Loại", "Ví", "Mã", "Số Lượng", "Giá", "Thành Tiền", "Lãi Chốt", "Ghi Chú"]
             transactions = []
             for t in raw['transactions']:
-                transactions.append({
-                    "ID": t['id'], "Loại": t['type'], "Ví": t['wallet_id'], "Mã": t['symbol'],
-                    "Số Lượng": t['quantity'], "Giá": t['price'], "Thành Tiền": t['amount'],
-                    "Lãi Chốt": t['realized_pl'], "Ghi Chú": t['note']
-                })
-            df_ledger = pd.DataFrame(transactions) if transactions else pd.DataFrame({"ID": ["Chưa có dữ liệu"]})
+                transactions.append([t['id'], t['type'], t['wallet_id'], t['symbol'], t['quantity'], t['price'], t['amount'], t['realized_pl'], t['note']])
+            df_ledger = pd.DataFrame(transactions, columns=ledger_cols) if transactions else pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
             df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
 
-            # --- BỌC LỚP CHỐNG LỖI KHI VẼ BẢNG ---
-            try:
-                wb = writer.book
-                for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
-                    ws = wb[sheet_name]
-                    
-                    # Căn chỉnh độ rộng
-                    for i, col in enumerate(df.columns):
-                        col_letter = get_column_letter(i + 1)
-                        max_len = max(df[col].astype(str).map(len).max() if not df.empty else 0, len(str(col))) + 4
-                        ws.column_dimensions[col_letter].width = min(max_len, 40) # Giới hạn không rộng quá 40
-                    
-                    # Thêm Table nếu có dữ liệu
-                    if not df.empty and df.shape[0] > 0 and len(df.columns) > 1:
-                        if "Chưa có" not in str(df.iloc[0, 0] if not df.empty else ""):
-                            max_row, max_col = df.shape
-                            ref = f"A1:{get_column_letter(max_col)}{max_row + 1}"
-                            tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
-                            style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
-                                                   showLastColumn=False, showRowStripes=True, showColumnStripes=True)
-                            tab.tableStyleInfo = style
-                            ws.add_table(tab)
-            except Exception as e:
-                pass # Nếu lỗi format thì vẫn trả về file Excel trơn, không sập hệ thống
+            # ==========================================
+            # FORMAT EXCEL TỰ ĐỘNG BẰNG OPENPYXL
+            # ==========================================
+            wb = writer.book
+            
+            # --- Vẽ Biểu Đồ Tròn (Pie Chart) ---
+            ws_dash = wb["Dashboard"]
+            pie = PieChart()
+            pie.title = "Phân Bổ Tỷ Trọng Vốn"
+            labels = Reference(ws_dash, min_col=1, min_row=10, max_row=11)
+            data = Reference(ws_dash, min_col=2, min_row=9, max_row=11)
+            pie.add_data(data, titles_from_data=True)
+            pie.set_categories(labels)
+            ws_dash.add_chart(pie, "D2") 
 
-        return output.getvalue() # Trả về chuẩn bytes thay vì object
+            # --- Format Số & Bảng ---
+            for sheet_name, df in [("Dashboard", df_dash), ("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
+                ws = wb[sheet_name]
+                
+                for row in ws.iter_rows(min_row=2):
+                    for cell in row:
+                        if isinstance(cell.value, (int, float)):
+                            cell.number_format = '#,##0' 
+
+                for i, col in enumerate(df.columns):
+                    col_letter = get_column_letter(i + 1)
+                    ws.column_dimensions[col_letter].width = 18 
+                
+                try:
+                    if sheet_name != "Dashboard":
+                        max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
+                        ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
+                        tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
+                        tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                        ws.add_table(tab)
+                    else:
+                        tab1 = Table(displayName="Tbl_Dash", ref=f"A1:B7")
+                        tab1.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+                        ws.add_table(tab1)
+                        
+                        tab2 = Table(displayName="Tbl_Alloc", ref=f"A9:B11")
+                        tab2.tableStyleInfo = TableStyleInfo(name="TableStyleMedium10", showRowStripes=True)
+                        ws.add_table(tab2)
+                except:
+                    pass
+
+        return output.getvalue()
+
+    def generate_chart_bytes(self):
+        stats = self._process_data()
+        raw = stats['raw_data']
+
+        net_capital = 0
+        capital_history = [0]
+        
+        transactions = sorted(raw['transactions'], key=lambda x: x['id'])
+        for t in transactions:
+            if t['wallet_id'] == 'CASH' and t['type'] in ['NAP', 'RUT']:
+                net_capital += (t['amount'] if t['amount'] else 0)
+                capital_history.append(net_capital)
+
+        if len(capital_history) == 1:
+            capital_history.append(net_capital)
+
+        x_points = range(len(capital_history))
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(x_points, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn thực nạp ròng', linewidth=2)
+
+        current_assets = stats['total_assets']
+        last_x = x_points[-1]
+
+        plt.plot([last_x, last_x], [net_capital, current_assets], color='#d62728', linestyle='--', linewidth=2)
+        plt.plot(last_x, current_assets, marker='o', color='#d62728', markersize=8, label='Tài sản thực hiện có')
+
+        plt.title('BIỂU ĐỒ BIẾN ĐỘNG VỐN & TÀI SẢN (NAV)', fontsize=14, fontweight='bold', pad=15)
+        plt.ylabel('Giá trị (VNĐ)', fontsize=12)
+        plt.xlabel('Trục thời gian (Theo tiến trình giao dịch Nạp/Rút)', fontsize=10, style='italic')
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend(loc='upper left')
+
+        def format_func(value, tick_number):
+            if abs(value) >= 1_000_000_000: return f"{value / 1_000_000_000:.1f} Tỷ"
+            elif abs(value) >= 1_000_000: return f"{value / 1_000_000:.0f} Tr"
+            return f"{value:,.0f}"
+
+        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(format_func))
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150)
+        plt.close()
+        buf.seek(0)
+        return buf.getvalue()
