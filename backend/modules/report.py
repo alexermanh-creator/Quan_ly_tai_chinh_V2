@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.chart import PieChart, Reference
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import PatternFill, Font
-from openpyxl.formatting.rule import CellIsRule
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
 from backend.database.repository import DatabaseRepo
 from backend.utils.formatter import format_currency
 
@@ -147,7 +147,6 @@ class ReportModule:
             capital_history.insert(0, capital_history[0])
             date_history.insert(0, date_history[0] - datetime.timedelta(days=30))
 
-        # LỌC NGÀY TRÙNG LẶP (Chỉ lấy số dư cuối ngày) để Spline không bị lỗi
         daily_data = {}
         for d, c in zip(date_history, capital_history):
             daily_data[d] = c
@@ -155,28 +154,24 @@ class ReportModule:
         unique_caps = list(daily_data.values())
 
         fig, ax = plt.subplots(figsize=(10, 5))
-        
         current_assets = stats['total_assets']
         
-        # ÁP DỤNG THUẬT TOÁN LÀM MƯỢT (Nếu có từ 4 điểm trở lên)
         if len(unique_dates) >= 4:
             x_num = mdates.date2num(unique_dates)
             x_smooth = np.linspace(x_num.min(), x_num.max(), 300)
             
             spl = make_interp_spline(x_num, unique_caps, k=3)
             y_smooth = spl(x_smooth)
-            y_smooth = np.clip(y_smooth, 0, None) # Đảm bảo đường cong không âm
+            y_smooth = np.clip(y_smooth, 0, None) 
             
             ax.fill_between(x_smooth, y_smooth, color='#1f77b4', alpha=0.15)
             ax.plot(x_smooth, y_smooth, linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2.5)
-            # Vẽ các chấm mốc giao dịch thật mờ mờ ở dưới
             ax.plot(x_num, unique_caps, 'o', color='#1f77b4', markersize=4, alpha=0.5)
 
             last_date_num = x_num[-1]
             ax.plot([last_date_num, last_date_num], [unique_caps[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
             ax.plot(last_date_num, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
         else:
-            # Nếu quá ít dữ liệu, giữ nguyên vẽ đường thẳng
             ax.fill_between(unique_dates, unique_caps, color='#1f77b4', alpha=0.15)
             ax.plot(unique_dates, unique_caps, marker='o', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2.5)
             
@@ -304,7 +299,7 @@ class ReportModule:
             df_matrix.to_excel(writer, sheet_name="Dashboard", index=False, startrow=15)
 
             # ==========================================
-            # SHEET 2, 3, 4
+            # SHEET 2, 3, 4: PORTFOLIO, PERFORMANCE, LEDGER
             # ==========================================
             port_cols = ["Ví", "Mã", "Số Lượng", "Giá Vốn TB", "Giá Hiện Tại", "Vốn Gốc VNĐ", "Lãi/Lỗ Tạm Tính"]
             portfolio = []
@@ -335,7 +330,76 @@ class ReportModule:
             df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
 
             # ==========================================
-            # FORMAT & VẼ BIỂU ĐỒ BẰNG OPENPYXL
+            # SHEET 5: HEATMAP (Bản đồ Lợi nhuận hàng tháng)
+            # ==========================================
+            heat_dict = {}
+            for t in raw['transactions']:
+                pl = t.get('realized_pl')
+                if pl:
+                    tx_date = datetime.date.today()
+                    if t.get('note'):
+                        m = re.search(r'\[(\d{4}-\d{2}-\d{2})\]', str(t['note']))
+                        if m: tx_date = datetime.datetime.strptime(m.group(1), '%Y-%m-%d').date()
+                    y, month = tx_date.year, tx_date.month
+                    if y not in heat_dict: heat_dict[y] = {i: 0 for i in range(1, 13)}
+                    heat_dict[y][month] += pl
+                    
+            heat_list = []
+            for y in sorted(heat_dict.keys()):
+                row = {"Năm": y}
+                for m in range(1, 13): row[f"Tháng {m}"] = heat_dict[y][m]
+                heat_list.append(row)
+                
+            if not heat_list:
+                heat_list = [{"Năm": datetime.date.today().year} | {f"Tháng {m}": 0 for m in range(1, 13)}]
+            df_heatmap = pd.DataFrame(heat_list)
+            df_heatmap.to_excel(writer, sheet_name="Heatmap", index=False)
+
+            # ==========================================
+            # SHEET 6: REBALANCING (Kế hoạch Tái cơ cấu)
+            # ==========================================
+            tot = stats['total_assets']
+            cash_val = stats['wallets']['CASH']['balance']
+            
+            rebal_data = [
+                {"Tài Sản": "Chứng Khoán (STOCK)", "Tỷ Trọng Hiện Tại (%)": (stock_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Độ Lệch (VNĐ)": (0.4*tot) - stock_val},
+                {"Tài Sản": "Tiền Số (CRYPTO)", "Tỷ Trọng Hiện Tại (%)": (crypto_val/tot*100) if tot else 0, "Mục Tiêu (%)": 40, "Độ Lệch (VNĐ)": (0.4*tot) - crypto_val},
+                {"Tài Sản": "Tiền Mặt (CASH)", "Tỷ Trọng Hiện Tại (%)": (cash_val/tot*100) if tot else 0, "Mục Tiêu (%)": 20, "Độ Lệch (VNĐ)": (0.2*tot) - cash_val}
+            ]
+            for r in rebal_data:
+                d = r["Độ Lệch (VNĐ)"]
+                if d > 500000: r["Khuyến Nghị Hành Động"] = f"Nên MUA thêm / CHUYỂN VÀO {d:,.0f} đ"
+                elif d < -500000: r["Khuyến Nghị Hành Động"] = f"Nên BÁN bớt / RÚT RA {-d:,.0f} đ"
+                else: r["Khuyến Nghị Hành Động"] = "Tuyệt vời! Đang ở mức Cân Bằng"
+            df_rebalance = pd.DataFrame(rebal_data)
+            df_rebalance.to_excel(writer, sheet_name="Rebalancing", index=False)
+
+            # ==========================================
+            # SHEET 7: TRADE ANALYTICS (Phân tích Tâm lý)
+            # ==========================================
+            win_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] > 0]
+            loss_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] < 0]
+            
+            max_win = max(win_trades) if win_trades else 0
+            max_loss = min(loss_trades) if loss_trades else 0
+            avg_win = sum(win_trades)/len(win_trades) if win_trades else 0
+            avg_loss = sum(loss_trades)/len(loss_trades) if loss_trades else 0
+            rr_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else (999 if avg_win else 0)
+            
+            rr_eval = "Rất Tốt" if rr_ratio >= 2 else ("Tạm Ổn" if rr_ratio >= 1 else "⚠️ BÁO ĐỘNG: Đang gồng lỗ, chốt non")
+            
+            analytics_data = [
+                {"Chỉ Số Kỹ Thuật": "Cú ăn đậm nhất (Largest Win)", "Giá Trị (VNĐ/Lần)": max_win, "Đánh Giá": "Đỉnh cao!" if max_win > 0 else "Chưa có"},
+                {"Chỉ Số Kỹ Thuật": "Cú cắt lỗ đau nhất (Largest Loss)", "Giá Trị (VNĐ/Lần)": max_loss, "Đánh Giá": "Cần kiểm soát rủi ro" if max_loss < -5000000 else "An toàn"},
+                {"Chỉ Số Kỹ Thuật": "Trung bình mỗi lần Ăn (Average Win)", "Giá Trị (VNĐ/Lần)": avg_win, "Đánh Giá": ""},
+                {"Chỉ Số Kỹ Thuật": "Trung bình mỗi lần Thua (Average Loss)", "Giá Trị (VNĐ/Lần)": avg_loss, "Đánh Giá": ""},
+                {"Chỉ Số Kỹ Thuật": "Tỷ lệ Lợi nhuận / Rủi ro (R:R Ratio)", "Giá Trị (VNĐ/Lần)": rr_ratio, "Đánh Giá": rr_eval}
+            ]
+            df_analytics = pd.DataFrame(analytics_data)
+            df_analytics.to_excel(writer, sheet_name="Trade Analytics", index=False)
+
+            # ==========================================
+            # FORMAT EXCEL AUTO BY OPENPYXL
             # ==========================================
             wb = writer.book
             ws_dash = wb["Dashboard"]
@@ -354,6 +418,11 @@ class ReportModule:
             red_font = Font(color='C5221F', bold=True)
             rule_green = CellIsRule(operator='greaterThan', formula=['0'], stopIfTrue=True, font=green_font, fill=green_fill)
             rule_red = CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, font=red_font, fill=red_fill)
+            
+            # Tô màu thông minh cho Heatmap (Màu nhiệt)
+            heatmap_rule = ColorScaleRule(start_type='min', start_color='FCE8E6',
+                                          mid_type='num', mid_value=0, mid_color='FFFFFF',
+                                          end_type='max', end_color='E6F4EA')
 
             try:
                 chart_io = self._generate_nav_chart_io(stats, raw)
@@ -371,11 +440,12 @@ class ReportModule:
                 ws_dash.add_chart(pie, "B21") 
             except: pass
 
-            for sheet_name, df in [("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger)]:
+            for sheet_name, df in [("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger), 
+                                   ("Heatmap", df_heatmap), ("Rebalancing", df_rebalance), ("Trade Analytics", df_analytics)]:
                 ws = wb[sheet_name]
                 for i, col in enumerate(df.columns):
                     col_letter = get_column_letter(i + 1)
-                    ws.column_dimensions[col_letter].width = 18 
+                    ws.column_dimensions[col_letter].width = 22 if sheet_name in ["Rebalancing", "Trade Analytics"] else 15
                 for row in ws.iter_rows(min_row=2):
                     for cell in row:
                         if isinstance(cell.value, (int, float)):
@@ -390,11 +460,20 @@ class ReportModule:
                 elif sheet_name == "Ledger":
                     ws.conditional_formatting.add("H2:H5000", rule_green)
                     ws.conditional_formatting.add("H2:H5000", rule_red)
+                elif sheet_name == "Heatmap":
+                    # Phủ bản đồ nhiệt từ cột B (Tháng 1) đến M (Tháng 12)
+                    ws.conditional_formatting.add("B2:M100", heatmap_rule)
+                elif sheet_name == "Rebalancing":
+                    ws.conditional_formatting.add("D2:D10", rule_green)
+                    ws.conditional_formatting.add("D2:D10", rule_red)
+                elif sheet_name == "Trade Analytics":
+                    ws.conditional_formatting.add("B2:B10", rule_green)
+                    ws.conditional_formatting.add("B2:B10", rule_red)
                 
                 try:
                     max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
                     ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
-                    tab = Table(displayName=f"Tbl_{sheet_name}", ref=ref)
+                    tab = Table(displayName=f"Tbl_{sheet_name.replace(' ', '_')}", ref=ref)
                     tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
                     ws.add_table(tab)
                 except: pass
