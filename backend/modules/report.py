@@ -273,9 +273,7 @@ class ReportModule:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             
-            # ==========================================
-            # SHEET 1: DASHBOARD
-            # ==========================================
+            # 1. DASHBOARD
             overview_data = {
                 "Chỉ Số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)", "Max Drawdown (%)"],
                 "Giá Trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate'], -stats['max_drawdown']]
@@ -298,9 +296,7 @@ class ReportModule:
             df_matrix = pd.DataFrame(matrix_data)
             df_matrix.to_excel(writer, sheet_name="Dashboard", index=False, startrow=15)
 
-            # ==========================================
-            # SHEET 2, 3, 4: PORTFOLIO, PERFORMANCE, LEDGER
-            # ==========================================
+            # 2. PORTFOLIO & PERFORMANCE
             port_cols = ["Ví", "Mã", "Số Lượng", "Giá Vốn TB", "Giá Hiện Tại", "Vốn Gốc VNĐ", "Lãi/Lỗ Tạm Tính"]
             portfolio = []
             for h in raw['holdings']:
@@ -322,16 +318,30 @@ class ReportModule:
             df_perf = pd.DataFrame(perf_list, columns=perf_cols) if perf_list else pd.DataFrame([[""]*len(perf_cols)], columns=perf_cols)
             df_perf.to_excel(writer, sheet_name="Performance", index=False)
 
+            # 3. TÁCH CÁC SHEET LỊCH SỬ (LEDGER, NẠP RÚT, STOCK, CRYPTO)
             ledger_cols = ["ID", "Loại", "Ví", "Mã", "Số Lượng", "Giá", "Thành Tiền", "Lãi Chốt", "Ghi Chú"]
             transactions = []
             for t in raw['transactions']:
                 transactions.append([t['id'], t['type'], t['wallet_id'], t['symbol'], t['quantity'], t['price'], t['amount'], t['realized_pl'], t['note']])
+            
             df_ledger = pd.DataFrame(transactions, columns=ledger_cols) if transactions else pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
-            df_ledger.to_excel(writer, sheet_name="Ledger", index=False)
+            
+            # Tách dữ liệu
+            df_cash = df_ledger[df_ledger['Ví'] == 'CASH'] if not df_ledger.empty else pd.DataFrame()
+            df_stock = df_ledger[df_ledger['Ví'] == 'STOCK'] if not df_ledger.empty else pd.DataFrame()
+            df_crypto = df_ledger[df_ledger['Ví'] == 'CRYPTO'] if not df_ledger.empty else pd.DataFrame()
 
-            # ==========================================
-            # SHEET 5: HEATMAP (Bản đồ Lợi nhuận hàng tháng)
-            # ==========================================
+            # Đảm bảo không bị trống cột nếu rỗng
+            if df_cash.empty: df_cash = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
+            if df_stock.empty: df_stock = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
+            if df_crypto.empty: df_crypto = pd.DataFrame([[""]*len(ledger_cols)], columns=ledger_cols)
+
+            df_ledger.to_excel(writer, sheet_name="Sổ Cái (All)", index=False)
+            df_cash.to_excel(writer, sheet_name="LS Nạp Rút", index=False)
+            df_stock.to_excel(writer, sheet_name="LS Chứng Khoán", index=False)
+            df_crypto.to_excel(writer, sheet_name="LS Crypto", index=False)
+
+            # 4. HEATMAP
             heat_dict = {}
             for t in raw['transactions']:
                 pl = t.get('realized_pl')
@@ -355,9 +365,7 @@ class ReportModule:
             df_heatmap = pd.DataFrame(heat_list)
             df_heatmap.to_excel(writer, sheet_name="Heatmap", index=False)
 
-            # ==========================================
-            # SHEET 6: REBALANCING (Kế hoạch Tái cơ cấu)
-            # ==========================================
+            # 5. REBALANCING
             tot = stats['total_assets']
             cash_val = stats['wallets']['CASH']['balance']
             
@@ -374,9 +382,7 @@ class ReportModule:
             df_rebalance = pd.DataFrame(rebal_data)
             df_rebalance.to_excel(writer, sheet_name="Rebalancing", index=False)
 
-            # ==========================================
-            # SHEET 7: TRADE ANALYTICS (Phân tích Tâm lý)
-            # ==========================================
+            # 6. TRADE ANALYTICS
             win_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] > 0]
             loss_trades = [t['realized_pl'] for t in raw['transactions'] if t.get('realized_pl') and t['realized_pl'] < 0]
             
@@ -419,7 +425,6 @@ class ReportModule:
             rule_green = CellIsRule(operator='greaterThan', formula=['0'], stopIfTrue=True, font=green_font, fill=green_fill)
             rule_red = CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, font=red_font, fill=red_fill)
             
-            # Tô màu thông minh cho Heatmap (Màu nhiệt)
             heatmap_rule = ColorScaleRule(start_type='min', start_color='FCE8E6',
                                           mid_type='num', mid_value=0, mid_color='FFFFFF',
                                           end_type='max', end_color='E6F4EA')
@@ -440,8 +445,15 @@ class ReportModule:
                 ws_dash.add_chart(pie, "B21") 
             except: pass
 
-            for sheet_name, df in [("Portfolio", df_port), ("Performance", df_perf), ("Ledger", df_ledger), 
-                                   ("Heatmap", df_heatmap), ("Rebalancing", df_rebalance), ("Trade Analytics", df_analytics)]:
+            # Áp dụng format cho TẤT CẢ các sheet phụ (Bao gồm cả 3 sheet lịch sử mới)
+            sheets_to_format = [
+                ("Portfolio", df_port), ("Performance", df_perf), 
+                ("Sổ Cái (All)", df_ledger), ("LS Nạp Rút", df_cash), 
+                ("LS Chứng Khoán", df_stock), ("LS Crypto", df_crypto),
+                ("Heatmap", df_heatmap), ("Rebalancing", df_rebalance), ("Trade Analytics", df_analytics)
+            ]
+
+            for sheet_name, df in sheets_to_format:
                 ws = wb[sheet_name]
                 for i, col in enumerate(df.columns):
                     col_letter = get_column_letter(i + 1)
@@ -451,17 +463,17 @@ class ReportModule:
                         if isinstance(cell.value, (int, float)):
                             cell.number_format = '#,##0' 
                 
+                # Áp dụng màu Lãi/Lỗ
                 if sheet_name == "Portfolio":
                     ws.conditional_formatting.add("G2:G1000", rule_green)
                     ws.conditional_formatting.add("G2:G1000", rule_red)
                 elif sheet_name == "Performance":
                     ws.conditional_formatting.add("C2:C1000", rule_green)
                     ws.conditional_formatting.add("C2:C1000", rule_red)
-                elif sheet_name == "Ledger":
+                elif sheet_name in ["Sổ Cái (All)", "LS Nạp Rút", "LS Chứng Khoán", "LS Crypto"]:
                     ws.conditional_formatting.add("H2:H5000", rule_green)
                     ws.conditional_formatting.add("H2:H5000", rule_red)
                 elif sheet_name == "Heatmap":
-                    # Phủ bản đồ nhiệt từ cột B (Tháng 1) đến M (Tháng 12)
                     ws.conditional_formatting.add("B2:M100", heatmap_rule)
                 elif sheet_name == "Rebalancing":
                     ws.conditional_formatting.add("D2:D10", rule_green)
@@ -473,7 +485,9 @@ class ReportModule:
                 try:
                     max_row = 2 if df.empty or str(df.iloc[0,0]) == "" else df.shape[0] + 1
                     ref = f"A1:{get_column_letter(len(df.columns))}{max_row}"
-                    tab = Table(displayName=f"Tbl_{sheet_name.replace(' ', '_')}", ref=ref)
+                    # Thay thế dấu cách trong tên table để tránh lỗi Excel
+                    tbl_name = f"Tbl_{sheet_name.replace(' ', '_').replace('(', '').replace(')', '')}"
+                    tab = Table(displayName=tbl_name, ref=ref)
                     tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
                     ws.add_table(tab)
                 except: pass
