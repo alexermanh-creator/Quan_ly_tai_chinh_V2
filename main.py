@@ -12,7 +12,7 @@ from backend.modules.wallet import WalletModule
 from backend.modules.crypto import CryptoModule
 from backend.modules.data_manager import DataManagerModule
 from backend.modules.history import HistoryModule
-from backend.modules.report import ReportModule  # IMPORT MODULE MỚI
+from backend.modules.report import ReportModule
 from backend.core.parser import parse_currency, parse_trade_command
 
 db = DatabaseRepo()
@@ -22,11 +22,10 @@ crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
 data_mod = DataManagerModule()
 hist_mod = HistoryModule()
-report_mod = ReportModule()  # KHỞI TẠO MODULE BÁO CÁO
+report_mod = ReportModule()
 
 user_context = {}
 
-# --- BÀN PHÍM ẢO [::] CHO LỊCH SỬ ---
 def get_history_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("💵 LS Nạp/Rút"), KeyboardButton("📊 LS Chứng khoán"))
@@ -49,7 +48,6 @@ def show_crypto(message):
     user_context[message.chat.id] = 'CRYPTO'
     bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
-# Đã tách luồng "📊 Báo cáo" (Của Home) và "📈 Báo cáo nhóm" (Của Stock/Crypto)
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
 def show_group_report(message):
     ctx = user_context.get(message.chat.id, 'STOCK')
@@ -59,7 +57,7 @@ def show_group_report(message):
         bot.send_message(message.chat.id, stock_mod.get_group_report())
 
 # ==========================================
-# MODULE REPORT (NÚT BẤM BÁO CÁO TỪ HOME)
+# MODULE REPORT & XUẤT EXCEL (ĐÃ THÊM TRY-EXCEPT)
 # ==========================================
 @bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
 def show_overall_report(message):
@@ -67,12 +65,18 @@ def show_overall_report(message):
     msg, markup = report_mod.get_telegram_report()
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
-# Xử lý nút bấm tải Excel Inline
 @bot.callback_query_handler(func=lambda call: call.data == 'export_excel_report')
 def handle_export_excel(call):
     bot.answer_callback_query(call.id, "Đang tạo file Excel. Vui lòng đợi...")
-    excel_bytes = report_mod.generate_excel_bytes()
-    bot.send_document(call.message.chat.id, document=(f"Bao_Cao_V3.4.xlsx", excel_bytes), caption="✅ File báo cáo Excel của Sếp đây ạ!")
+    try:
+        excel_bytes = report_mod.generate_excel_bytes()
+        bot.send_document(
+            call.message.chat.id, 
+            document=("Bao_Cao_V3.4.xlsx", excel_bytes), 
+            caption="✅ File báo cáo Excel của Sếp đây ạ!"
+        )
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"❌ Lỗi khi xuất file: {str(e)}")
 
 @bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
 def show_data_menu(message):
@@ -88,7 +92,7 @@ def handle_docs(message):
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
 # ==========================================
-# MODULE LỊCH SỬ (NÚT BẤM & LỌC)
+# MODULE LỊCH SỬ 
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
 def show_history(message):
