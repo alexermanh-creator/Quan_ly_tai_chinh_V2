@@ -62,7 +62,6 @@ class ReportModule:
         total_trades = wins + losses
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         
-        # Max Drawdown Logic
         current_cap = 0; current_realized_pl = 0; peak_nav_proxy = 0
         transactions = sorted(data['transactions'], key=lambda x: x['id'])
         for t in transactions:
@@ -129,7 +128,7 @@ class ReportModule:
         stats = self._process_data(); raw = stats['raw_data']
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. Dashboard & Matrix
+            # 1. Dashboard
             df_dash = pd.DataFrame({"Chỉ Số": ["Tổng Tài Sản", "Tổng Nạp", "Tổng Rút", "Tiền Mặt (CASH)", "Lãi/Lỗ Tổng", "Win Rate (%)", "Max Drawdown (%)"], 
                                     "Giá Trị": [stats['total_assets'], stats['total_in'], stats['total_out'], stats['wallets']['CASH']['balance'], stats['total_pl'], stats['win_rate'], -stats['max_drawdown']]})
             df_dash.to_excel(writer, sheet_name="Dashboard", index=False)
@@ -148,8 +147,16 @@ class ReportModule:
             # 2. Portfolio & Performance
             pd.DataFrame([[h['wallet_id'], h['symbol'], h['quantity'], h['average_price'], h['current_price'], h['cost_basis_vnd']] for h in raw['holdings']], 
                          columns=["Ví", "Mã", "SL", "Giá Vốn", "Giá HT", "Vốn Gốc"]).to_excel(writer, sheet_name="Portfolio", index=False)
+            
+            perf_dict = {}
+            for t in raw['transactions']:
+                if t['type'] == 'BAN' and t['realized_pl'] is not None and t['symbol']:
+                    sym = t['symbol']
+                    if sym not in perf_dict: perf_dict[sym] = {"Số Lần Bán": 0, "Tổng Lãi/Lỗ Thực Tế": 0}
+                    perf_dict[sym]["Số Lần Bán"] += 1; perf_dict[sym]["Tổng Lãi/Lỗ Thực Tế"] += t['realized_pl']
+            pd.DataFrame([[k, v["Số Lần Bán"], v["Tổng Lãi/Lỗ Thực Tế"]] for k, v in perf_dict.items()], columns=["Mã", "Số Lần Bán", "Lãi/Lỗ Thực Tế"]).to_excel(writer, sheet_name="Performance", index=False)
 
-            # 3. History Sheets (CASH, STOCK, CRYPTO)
+            # 3. History Sheets
             l_cols = ["ID", "Loại", "Ví", "Mã", "Số Lượng", "Giá", "Thành Tiền", "Lãi Chốt", "Ghi Chú"]
             df_l = pd.DataFrame([[t['id'], t['type'], t['wallet_id'], t['symbol'], t['quantity'], t['price'], t['amount'], t['realized_pl'], t['note']] for t in raw['transactions']], columns=l_cols)
             df_l.to_excel(writer, sheet_name="Sổ Cái (All)", index=False)
@@ -158,7 +165,7 @@ class ReportModule:
                 df_sub = df_l[df_l['Ví'] == wid] if wid != "CASH" else df_l[df_l['Loại'].isin(['NAP','RUT'])]
                 df_sub.to_excel(writer, sheet_name=name, index=False, startrow=16)
 
-            # 4. Heatmap, Rebalancing, Analytics
+            # 4. Analytics Sheets
             heat_dict = {}
             for t in raw['transactions']:
                 if t.get('realized_pl'):
@@ -169,8 +176,7 @@ class ReportModule:
                     y, mo = dt.year, dt.month
                     if y not in heat_dict: heat_dict[y] = {i: 0 for i in range(1, 13)}
                     heat_dict[y][mo] += t['realized_pl']
-            df_heat = pd.DataFrame([{"Năm": y} | {f"Tháng {m}": heat_dict[y][m] for m in range(1, 13)} for y in sorted(heat_dict.keys())])
-            df_heat.to_excel(writer, sheet_name="Heatmap", index=False)
+            pd.DataFrame([{"Năm": y} | {f"Tháng {m}": heat_dict[y][m] for m in range(1, 13)} for y in sorted(heat_dict.keys())]).to_excel(writer, sheet_name="Heatmap", index=False)
 
             tot = stats['total_assets']
             re_data = [
@@ -183,37 +189,43 @@ class ReportModule:
             w_t = [t['realized_pl'] for t in raw['transactions'] if (t.get('realized_pl') or 0) > 0]
             l_t = [t['realized_pl'] for t in raw['transactions'] if (t.get('realized_pl') or 0) < 0]
             avg_w = sum(w_t)/len(w_t) if w_t else 0; avg_l = sum(l_t)/len(l_t) if l_t else 0
-            pd.DataFrame([{"Chỉ Số": "Largest Win", "Giá Trị": max(w_t) if w_t else 0}, {"Chỉ Số": "Largest Loss", "Giá Trị": min(l_t) if l_t else 0}, 
-                          {"Chỉ Số": "R:R Ratio", "Giá Trị": abs(avg_w/avg_l) if avg_l else 0}]).to_excel(writer, sheet_name="Trade Analytics", index=False)
+            pd.DataFrame([{"Chỉ Số": "Lãi lớn nhất (Largest Win)", "Giá Trị": max(w_t) if w_t else 0}, {"Chỉ Số": "Lỗ nặng nhất (Largest Loss)", "Giá Trị": min(l_t) if l_t else 0}, 
+                          {"Chỉ Số": "Tỷ lệ R:R (Average Win/Loss)", "Giá Trị": abs(avg_w/avg_l) if avg_l else 0}]).to_excel(writer, sheet_name="Trade Analytics", index=False)
 
         wb = writer.book
-        # Format Dashboard
-        ws_d = wb["Dashboard"]; ws_d.column_dimensions['A'].width = 25; ws_d.column_dimensions['B'].width = 20
-        try: ws_d.add_image(ExcelImage(self._generate_nav_chart_io(stats, raw)), "H1")
-        except: pass
-
-        # Format History Sheets with Summary
-        for name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"]:
-            ws = wb[name]; w_k = "STOCK" if "Chứng Khoán" in name else ("CRYPTO" if "Crypto" in name else "CASH")
-            w_d = stats['wallets'].get(w_k, {})
-            ws['A1'] = f"📑 BÁO CÁO TÀI CHÍNH: {name.upper()}"; ws['A1'].font = Font(bold=True, size=14)
-            lines = [f"💰 Tài sản: {format_currency(w_d.get('assets',0) + w_d.get('balance',0))}", f"📤 Nạp: {format_currency(w_d.get('in',0))} | 📥 Rút: {format_currency(w_d.get('out',0))}", 
-                     f"📈 Lãi/Lỗ: {format_currency(w_d.get('realized',0) + w_d.get('unrealized',0))}"]
-            for i, l in enumerate(lines): ws[f'A{i+3}'] = l
+        # Formatting
+        for name in wb.sheetnames:
+            ws = wb[name]
+            for col in range(1, ws.max_column + 1): ws.column_dimensions[get_column_letter(col)].width = 22
             
-            last = ws.max_row
-            if last >= 17:
-                tab = Table(displayName=f"Tbl_{w_k}", ref=f"A17:{get_column_letter(ws.max_column)}{last}")
-                tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True); ws.add_table(tab)
-            for r in ws.iter_rows(min_row=18): 
-                for c in r: 
-                    if isinstance(c.value, (int, float)): c.number_format = '#,##0'
+            if name in ["LS Chứng Khoán", "LS Crypto", "LS Nạp Rút"]:
+                w_k = "STOCK" if "Chứng Khoán" in name else ("CRYPTO" if "Crypto" in name else "CASH")
+                w_d = stats['wallets'].get(w_k, {})
+                ws['A1'] = f"📑 BÁO CÁO TÀI CHÍNH: {name.upper()}"; ws['A1'].font = Font(bold=True, size=14)
+                
+                sum_lines = [f"💰 Tài sản: {format_currency(w_d.get('assets',0) + w_d.get('balance',0))}", 
+                             f"📤 Nạp: {format_currency(w_d.get('in',0))} | 📥 Rút: {format_currency(w_d.get('out',0))}", 
+                             f"📈 Lãi/Lỗ: {format_currency(w_d.get('realized',0) + w_d.get('unrealized',0))}"]
+                for i, l in enumerate(sum_lines): ws[f'A{i+3}'] = l
+                
+                last = ws.max_row
+                if last >= 17:
+                    tab = Table(displayName=f"Tbl_{w_k}", ref=f"A17:{get_column_letter(ws.max_column)}{last}")
+                    tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True); ws.add_table(tab)
+            
+            for row in ws.iter_rows(min_row=2):
+                for cell in row:
+                    if isinstance(cell.value, (int, float)): cell.number_format = '#,##0'
+
+        # Dashboard Add Image
+        try: wb["Dashboard"].add_image(ExcelImage(self._generate_nav_chart_io(stats, raw)), "H1")
+        except: pass
 
         return output.getvalue()
 
     def get_telegram_report(self):
         stats = self._process_data()
-        msg = f"📊 **BÁO CÁO TỔNG QUAN**\n💰 Tài sản: {format_currency(stats['total_assets'])}\n📈 Lãi/Lỗ: {format_currency(stats['total_pl'])}\n📉 Drawdown: -{stats['max_drawdown']:.1f}%"
+        msg = f"📊 **BÁO CÁO TỔNG QUAN V3.4**\n💰 Tài sản: {format_currency(stats['total_assets'])}\n📈 Lãi/Lỗ: {format_currency(stats['total_pl'])}\n📉 Drawdown: -{stats['max_drawdown']:.1f}%"
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("📈 Biểu đồ NAV", callback_data="view_nav_chart"), InlineKeyboardButton("📊 Xuất Excel Full", callback_data="export_excel_report"))
         return msg, markup
