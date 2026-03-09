@@ -3,6 +3,8 @@ import pandas as pd
 import io
 import re
 import datetime
+import numpy as np
+from scipy.interpolate import make_interp_spline
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
@@ -145,16 +147,42 @@ class ReportModule:
             capital_history.insert(0, capital_history[0])
             date_history.insert(0, date_history[0] - datetime.timedelta(days=30))
 
+        # LỌC NGÀY TRÙNG LẶP (Chỉ lấy số dư cuối ngày) để Spline không bị lỗi
+        daily_data = {}
+        for d, c in zip(date_history, capital_history):
+            daily_data[d] = c
+        unique_dates = list(daily_data.keys())
+        unique_caps = list(daily_data.values())
+
         fig, ax = plt.subplots(figsize=(10, 5))
         
-        ax.fill_between(date_history, capital_history, color='#1f77b4', alpha=0.15)
-        ax.plot(date_history, capital_history, marker='.', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2)
-
         current_assets = stats['total_assets']
-        last_date = date_history[-1]
+        
+        # ÁP DỤNG THUẬT TOÁN LÀM MƯỢT (Nếu có từ 4 điểm trở lên)
+        if len(unique_dates) >= 4:
+            x_num = mdates.date2num(unique_dates)
+            x_smooth = np.linspace(x_num.min(), x_num.max(), 300)
+            
+            spl = make_interp_spline(x_num, unique_caps, k=3)
+            y_smooth = spl(x_smooth)
+            y_smooth = np.clip(y_smooth, 0, None) # Đảm bảo đường cong không âm
+            
+            ax.fill_between(x_smooth, y_smooth, color='#1f77b4', alpha=0.15)
+            ax.plot(x_smooth, y_smooth, linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2.5)
+            # Vẽ các chấm mốc giao dịch thật mờ mờ ở dưới
+            ax.plot(x_num, unique_caps, 'o', color='#1f77b4', markersize=4, alpha=0.5)
 
-        ax.plot([last_date, last_date], [capital_history[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
-        ax.plot(last_date, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
+            last_date_num = x_num[-1]
+            ax.plot([last_date_num, last_date_num], [unique_caps[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
+            ax.plot(last_date_num, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
+        else:
+            # Nếu quá ít dữ liệu, giữ nguyên vẽ đường thẳng
+            ax.fill_between(unique_dates, unique_caps, color='#1f77b4', alpha=0.15)
+            ax.plot(unique_dates, unique_caps, marker='o', linestyle='-', color='#1f77b4', label='Vốn Nạp Ròng', linewidth=2.5)
+            
+            last_date = unique_dates[-1]
+            ax.plot([last_date, last_date], [unique_caps[-1], current_assets], color='#d62728', linestyle='--', linewidth=2)
+            ax.plot(last_date, current_assets, marker='o', color='#d62728', markersize=8, label='Tài Sản Thực Tế (NAV)')
 
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%Y'))
         fig.autofmt_xdate()
@@ -312,17 +340,14 @@ class ReportModule:
             wb = writer.book
             ws_dash = wb["Dashboard"]
             
-            # Ép nới rộng toàn bộ mặt tiền Dashboard từ cột A đến G
             for col_str in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
                 ws_dash.column_dimensions[col_str].width = 22
 
-            # Ép Format số (có dấu phẩy) cho TOÀN BỘ Dashboard
             for row in ws_dash.iter_rows(min_row=2, max_row=25):
                 for cell in row:
                     if isinstance(cell.value, (int, float)):
                         cell.number_format = '#,##0'
 
-            # Quy luật màu sắc cho các ô Lãi/Lỗ
             green_fill = PatternFill(start_color='E6F4EA', end_color='E6F4EA', fill_type='solid')
             green_font = Font(color='137333', bold=True)
             red_fill = PatternFill(start_color='FCE8E6', end_color='FCE8E6', fill_type='solid')
@@ -331,14 +356,12 @@ class ReportModule:
             rule_red = CellIsRule(operator='lessThan', formula=['0'], stopIfTrue=True, font=red_font, fill=red_fill)
 
             try:
-                # Ảnh Line Chart chèn sang cột H (Mái vòm phải)
                 chart_io = self._generate_nav_chart_io(stats, raw)
                 img = ExcelImage(chart_io)
                 ws_dash.add_image(img, "H1") 
             except: pass
 
             try:
-                # Biểu đồ Tròn dời xuống dưới Bảng Matrix (B21)
                 pie = PieChart()
                 pie.title = "Phân Bổ Tỷ Trọng Vốn"
                 labels = Reference(ws_dash, min_col=1, min_row=12, max_row=13)
@@ -358,7 +381,6 @@ class ReportModule:
                         if isinstance(cell.value, (int, float)):
                             cell.number_format = '#,##0' 
                 
-                # Áp dụng màu tự động cho Lãi/Lỗ ở các Sheet phụ
                 if sheet_name == "Portfolio":
                     ws.conditional_formatting.add("G2:G1000", rule_green)
                     ws.conditional_formatting.add("G2:G1000", rule_red)
@@ -377,7 +399,6 @@ class ReportModule:
                     ws.add_table(tab)
                 except: pass
 
-            # Áp dụng Table và Màu cho Dashboard
             try:
                 ws_dash.conditional_formatting.add("B6:B6", rule_green)
                 ws_dash.conditional_formatting.add("B6:B6", rule_red)
