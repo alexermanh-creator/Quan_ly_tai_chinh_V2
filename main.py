@@ -12,6 +12,7 @@ from backend.modules.wallet import WalletModule
 from backend.modules.crypto import CryptoModule
 from backend.modules.data_manager import DataManagerModule
 from backend.modules.history import HistoryModule
+from backend.modules.report import ReportModule  # IMPORT MODULE MỚI
 from backend.core.parser import parse_currency, parse_trade_command
 
 db = DatabaseRepo()
@@ -21,6 +22,7 @@ crypto_mod = CryptoModule()
 wallet_mod = WalletModule()
 data_mod = DataManagerModule()
 hist_mod = HistoryModule()
+report_mod = ReportModule()  # KHỞI TẠO MODULE BÁO CÁO
 
 user_context = {}
 
@@ -47,13 +49,30 @@ def show_crypto(message):
     user_context[message.chat.id] = 'CRYPTO'
     bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
 
+# Đã tách luồng "📊 Báo cáo" (Của Home) và "📈 Báo cáo nhóm" (Của Stock/Crypto)
 @bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def show_report(message):
+def show_group_report(message):
     ctx = user_context.get(message.chat.id, 'STOCK')
     if ctx == 'CRYPTO':
         bot.send_message(message.chat.id, crypto_mod.get_group_report())
     else:
         bot.send_message(message.chat.id, stock_mod.get_group_report())
+
+# ==========================================
+# MODULE REPORT (NÚT BẤM BÁO CÁO TỪ HOME)
+# ==========================================
+@bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
+def show_overall_report(message):
+    bot.send_message(message.chat.id, "⏳ Đang tổng hợp số liệu danh mục...", parse_mode="Markdown")
+    msg, markup = report_mod.get_telegram_report()
+    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+# Xử lý nút bấm tải Excel Inline
+@bot.callback_query_handler(func=lambda call: call.data == 'export_excel_report')
+def handle_export_excel(call):
+    bot.answer_callback_query(call.id, "Đang tạo file Excel. Vui lòng đợi...")
+    excel_bytes = report_mod.generate_excel_bytes()
+    bot.send_document(call.message.chat.id, document=(f"Bao_Cao_V3.4.xlsx", excel_bytes), caption="✅ File báo cáo Excel của Sếp đây ạ!")
 
 @bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
 def show_data_menu(message):
@@ -98,7 +117,6 @@ def close_history_menu(message):
     bot.send_message(message.chat.id, "✅ Đã đóng Menu Lịch sử.", reply_markup=get_home_keyboard())
     show_home(message)
 
-# Xử lý lật trang Inline (ĐÃ FIX LỖI BỎ QUÊN NÚT 🚫)
 @bot.callback_query_handler(func=lambda call: call.data.startswith('his_') or call.data == 'ignore')
 def handle_history_callbacks(call):
     if call.data == 'ignore':
@@ -130,7 +148,6 @@ def handle_manual_commands(message):
             parts = text.split()
             if len(parts) > 1:
                 term = parts[1].upper()
-                # Bổ sung bộ lọc từ khóa thông minh
                 if term in ['NAP', 'RUT', 'CASH']: 
                     msg, markup = hist_mod.get_history_ui(filter_type='CASH')
                 elif term in ['STOCK', 'CK', 'CHUNGKHOAN']: 
@@ -140,7 +157,6 @@ def handle_manual_commands(message):
                 elif term in ['KHAC', 'OTHER']: 
                     msg, markup = hist_mod.get_history_ui(filter_type='OTHER')
                 else: 
-                    # Nếu không trúng từ khóa nào ở trên, tự hiểu đó là Mã (Ví dụ: VPB, ETH)
                     msg, markup = hist_mod.get_history_ui(symbol=term)
                 
                 bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
@@ -195,5 +211,3 @@ def handle_manual_commands(message):
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
-
-
