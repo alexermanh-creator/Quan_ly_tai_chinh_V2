@@ -4,4 +4,6 @@ pandas
 openpyxl
 matplotlib
 Pillow
+numpy
+scipy
 
