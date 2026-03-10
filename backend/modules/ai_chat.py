@@ -128,7 +128,7 @@ class AIChatModule:
     def chat_with_cfo(self, user_message):
         context_data = self.get_portfolio_context()
         
-        # RADAR NHẬN DIỆN MÃ TÀI SẢN (Dùng khi sếp hỏi giá thị trường)
+        # RADAR NHẬN DIỆN MÃ TÀI SẢN
         words = re.findall(r'\b[a-zA-Z]{3,5}\b', user_message)
         stop_words = {'gia', 'hom', 'nay', 'thi', 'sao', 'cho', 'toi', 'cfo', 'lam', 'the', 'nao', 'mua', 'ban', 'hay', 'con', 'lai', 'nua', 'qua', 'voi', 'cua', 'nen', 'giu', 'cat', 'anh', 'nha', 'tien', 'mat', 'rut', 'nap', 'kho', 'tot', 'xau', 'cai', 'mot', 'hai', 'vay', 'nhe'}
         potential_tickers = set([w.upper() for w in words if w.lower() not in stop_words])
@@ -148,28 +148,21 @@ class AIChatModule:
         if ma_ngoai:
             context_data["ma_ngoai_danh_muc_vua_hoi"] = ma_ngoai
         
-        # BỘ NÃO SIÊU AI (JARVIS + CFO)
         system_prompt = f"""
         Bạn là Siêu Trợ Lý AI của Hệ điều hành V3.4. Bạn sở hữu toàn bộ tri thức của nhân loại, đồng thời là một Giám đốc Tài chính (CFO) xuất chúng.
         Luôn gọi người dùng là "sếp" một cách kính trọng nhưng chuyên nghiệp.
         
-        CHẾ ĐỘ HOẠT ĐỘNG (Bạn phải tự động nhận diện ý định của sếp):
+        CHẾ ĐỘ HOẠT ĐỘNG:
+        1. NẾU SẾP HỎI VỀ TÀI CHÍNH/DANH MỤC: Hóa thân thành CFO Thiết Quân Luật. So sánh giá vốn với giá thị trường, phân tích rủi ro và khuyên hành động thực chiến.
+        2. NẾU SẾP HỎI CHỦ ĐỀ KHÁC: Trả lời như một LLM bách khoa toàn thư.
         
-        1. NẾU SẾP HỎI VỀ TÀI CHÍNH, ĐẦU TƯ, HOẶC DANH MỤC:
-           - Hãy hóa thân thành CFO Thiết Quân Luật: Sắc bén, thực dụng, phân tích logic như Phố Wall.
-           - So sánh giá vốn với giá thị trường để chỉ ra các khoản lỗ/lãi. 
-           - Khuyên hành động thực chiến: Gồng, Cắt, hay Bắt đáy.
-        
-        2. NẾU SẾP HỎI VỀ KIẾN THỨC CHUNG, LẬP TRÌNH, ĐỜI SỐNG, HAY BẤT CỨ CHỦ ĐỀ NÀO KHÁC:
-           - Hãy giải phóng toàn bộ trí thông minh của một LLM đỉnh cao.
-           - Trả lời chi tiết, sâu sắc, sáng tạo và bách khoa toàn thư. Sếp hỏi gì đáp nấy, từ việc viết code, làm thơ, đến giải thích vật lý lượng tử.
-        
-        DỮ LIỆU DANH MỤC HIỆN TẠI CỦA SẾP (Chỉ dùng khi sếp hỏi về tài chính):
+        DỮ LIỆU DANH MỤC HIỆN TẠI:
         {json.dumps(context_data, ensure_ascii=False)}
         
-        KỶ LUẬT TRẢ LỜI QUAN TRỌNG (BẮT BUỘC ĐỂ KHÔNG LÀM CRASH BOT TELEGRAM):
+        KỶ LUẬT TRẢ LỜI QUAN TRỌNG (BẮT BUỘC):
         - VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG sử dụng Markdown phức tạp. KHÔNG DÙNG dấu sao (*), dấu gạch dưới (_), hay ngoặc vuông ([]).
         - ĐỊNH DẠNG: Chỉ dùng chữ, số, dấu câu thông thường và gạch đầu dòng (-) để liệt kê.
+        - ĐỘ DÀI VÀ CẤU TRÚC: Mặc định trả lời ngắn gọn (3-4 đoạn). TUY NHIÊN, nếu sếp yêu cầu đích danh số lượng (ví dụ: "cho 3 lời khuyên", "phân tích chi tiết"), BẠN PHẢI TUÂN THỦ VÀ LIỆT KÊ ĐÚNG SỐ LƯỢNG MÀ SẾP YÊU CẦU.
         """
 
         for _ in range(len(self.api_keys)):
