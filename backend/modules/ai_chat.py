@@ -1,7 +1,6 @@
 # backend/modules/ai_chat.py
 import os
 import json
-import time
 import requests
 import google.generativeai as genai
 from backend.database.repository import DatabaseRepo
@@ -45,33 +44,37 @@ class AIChatModule:
         self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
 
     def _get_realtime_price(self, symbol, wallet_type):
-        """Động cơ dò giá 4 màng lọc - Bất tử trước mọi tường lửa"""
+        """Hệ thống lấy giá xuyên tường lửa (Sử dụng API Global)"""
         try:
+            # Header giả lập trình duyệt thật để vượt bot detection
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             symbol = symbol.upper().strip()
 
             if wallet_type == 'CRYPTO':
-                # Gọi API Binance
+                # Gọi API Binance (Toàn cầu - Không chặn)
                 res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
                 if res.status_code == 200:
                     return float(res.json()['price'])
             
             elif wallet_type == 'STOCK':
-                # --- TẦNG 1: VNDirect (Ổn định nhất) ---
+                # --- TẦNG 1: YAHOO FINANCE REST API (Bất tử trước tường lửa VN) ---
                 try:
-                    res = requests.get(f"https://finfo-api.vndirect.com.vn/v4/stock_prices?sort=date:desc&q=code:{symbol}&size=1", headers=headers, timeout=4)
+                    # Mã chứng khoán VN trên Yahoo phải có đuôi .VN (VD: VPB.VN)
+                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?region=US&lang=en-US"
+                    res = requests.get(url, headers=headers, timeout=5)
                     if res.status_code == 200:
-                        data = res.json().get('data', [])
-                        if data:
-                            price = float(data[0]['close'])
-                            return price * 1000 if price < 1000 else price
-                except Exception:
-                    pass
+                        data = res.json()
+                        # Bóc tách giá từ chuỗi JSON siêu sâu của Yahoo
+                        price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+                        if price > 0:
+                            # Yahoo thường trả giá trị thực (25500), nếu trả 25.5 thì tự x1000
+                            return price if price >= 1000 else price * 1000
+                except Exception as e:
+                    print(f"[AI INFO] Yahoo Finance trượt: {e}")
 
-                # --- TẦNG 2: TCBS ---
+                # --- TẦNG 2: TCBS API (Dự phòng nếu chạy Bot tại VN) ---
                 try:
                     res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=4)
                     if res.status_code == 200:
@@ -81,34 +84,10 @@ class AIChatModule:
                 except Exception:
                     pass
 
-                # --- TẦNG 3: DNSE (TradingView Backend) ---
-                try:
-                    to_time = int(time.time())
-                    from_time = to_time - (10 * 86400) # Lấy data 10 ngày
-                    url = f"https://services.entrade.com.vn/chart-api/v2/ohlcs/stock?from={from_time}&to={to_time}&symbol={symbol}&resolution=1D"
-                    res = requests.get(url, headers=headers, timeout=4)
-                    if res.status_code == 200:
-                        data = res.json()
-                        if 'c' in data and len(data['c']) > 0:
-                            price = float(data['c'][-1])
-                            return price * 1000 if price < 1000 else price
-                except Exception:
-                    pass
-
-                # --- TẦNG 4: Simplize ---
-                try:
-                    res = requests.get(f"https://api.simplize.vn/api/company/ticker-info/{symbol}", headers=headers, timeout=4)
-                    if res.status_code == 200:
-                        price = float(res.json().get('data', {}).get('priceClose', 0))
-                        if price > 0:
-                            return price * 1000 if price < 1000 else price
-                except Exception:
-                    pass
-                    
         except Exception as e:
             print(f"[AI WARN] Lỗi hệ thống dò giá: {e}")
             
-        return None # Rớt cả 4 mạng thì mới chịu dùng Offline
+        return None # Nếu tất cả sập thì mới dùng Offline
 
     def get_portfolio_context(self):
         stats = self.report._process_data()
@@ -125,7 +104,7 @@ class AIChatModule:
             w_type = h['wallet_id']
             gia_database = h['current_price']
             
-            # Quét giá mạng Real-time
+            # Quét giá mạng Real-time qua API Global
             gia_realtime = self._get_realtime_price(sym, w_type)
             gia_chot = gia_realtime if gia_realtime else gia_database
             nguon = "TRỰC TIẾP TRÊN SÀN (Real-time)" if gia_realtime else "Sổ sách Offline"
