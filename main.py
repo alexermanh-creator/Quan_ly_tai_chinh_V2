@@ -185,9 +185,38 @@ def handle_history_callbacks(call):
 def trade_ins(message):
     bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`", parse_mode="Markdown")
 
+# HÀM BẮT SỰ KIỆN NÚT BẤM "CẬP NHẬT GIÁ" TRÊN MENU (GỌI MODULE PRICE UPDATER)
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
-def refresh_ins(message):
-    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\nCú pháp: `up [MÃ] [GIÁ]`", parse_mode="Markdown")
+def handle_auto_update_price(message):
+    msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time, sếp đợi vài giây nhé...")
+    try:
+        # Tự động lấy danh sách các mã sếp đang cầm
+        rows = db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings WHERE quantity != 0", fetch_one=False)
+        if not rows:
+            bot.edit_message_text("⚠️ Danh mục trống, chưa có mã nào để cập nhật.", chat_id=message.chat.id, message_id=msg.message_id)
+            return
+
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def _fetch_and_update(item):
+            sym = item['symbol']
+            w_type = item['wallet_id']
+            # Mượn tạm động cơ dò giá siêu việt của auto_updater
+            price = auto_updater._get_realtime_price(sym, w_type)
+            if price:
+                db.update_market_price(sym, price)
+                return f"✅ `{sym}`: {price:,.0f} đ"
+            return f"⚠️ `{sym}`: Rớt mạng (Giữ giá cũ)"
+
+        # Phái 5 lính chạy đa luồng đi cào giá
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(_fetch_and_update, rows))
+        
+        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results) + "\n\n💡 _Nếu muốn cập nhật tay, sếp gõ: `up [MÃ] [GIÁ]`_"
+        bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+        
+    except Exception as e:
+        bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ']))
 def handle_manual_commands(message):
