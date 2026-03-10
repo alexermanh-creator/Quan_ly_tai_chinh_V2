@@ -15,7 +15,6 @@ from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
 from backend.core.parser import parse_currency, parse_trade_command
 from backend.modules.ai_chat import AIChatModule
-
 # IMPORT MODULE CẬP NHẬT GIÁ NGẦM
 from backend.modules.price_updater import PriceUpdaterModule
 
@@ -27,10 +26,8 @@ wallet_mod = WalletModule()
 data_mod = DataManagerModule()
 hist_mod = HistoryModule()
 report_mod = ReportModule()
-
 # KHỞI TẠO NÃO BỘ AI
 cfo_ai = AIChatModule()
-
 # KHỞI TẠO ĐỘNG CƠ ĐỒNG BỘ GIÁ (Cài đặt 30 phút quét 1 lần)
 auto_updater = PriceUpdaterModule(interval_minutes=30)
 
@@ -188,13 +185,36 @@ def trade_ins(message):
 # HÀM BẮT SỰ KIỆN NÚT BẤM "CẬP NHẬT GIÁ" TRÊN MENU (GỌI MODULE PRICE UPDATER)
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def handle_auto_update_price(message):
-    msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time, sếp đợi vài giây nhé...")
+    msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time cho Sếp...")
     try:
-        # Tự động lấy danh sách các mã sếp đang cầm
-        rows = db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings WHERE quantity != 0", fetch_one=False)
+        # SỬA LỖI TẠI ĐÂY: Bỏ điều kiện WHERE quantity != 0 để tránh lỗi định dạng số
+        rows = db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings", fetch_one=False)
+        
         if not rows:
-            bot.edit_message_text("⚠️ Danh mục trống, chưa có mã nào để cập nhật.", chat_id=message.chat.id, message_id=msg.message_id)
+            bot.edit_message_text("⚠️ Danh mục trống hoặc chưa có mã nào được ghi nhận.", chat_id=message.chat.id, message_id=msg.message_id)
             return
+
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def _fetch_and_update(item):
+            sym = item['symbol']
+            w_type = item['wallet_id']
+            # Mượn tạm động cơ lấy giá từ module auto_updater
+            price = auto_updater._get_realtime_price(sym, w_type)
+            if price:
+                db.update_market_price(sym, price)
+                return f"✅ `{sym}`: {price:,.0f} đ"
+            return f"⚠️ `{sym}`: Không lấy được giá"
+
+        # Tăng tốc bằng đa luồng
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(_fetch_and_update, rows))
+        
+        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results)
+        bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+        
+    except Exception as e:
+        bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
 
         from concurrent.futures import ThreadPoolExecutor
         
@@ -316,7 +336,7 @@ def handle_fallback_and_ai_chat(message):
         bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để AI hỗ trợ.")
 
 if __name__ == "__main__":
-    # KÍCH HOẠT CHẠY NGẦM AUTO-SYNC GIÁ TRƯỚC KHI BOT CHẠY
+    # Kích hoạt chạy ngầm cập nhật giá mỗi 30p
     auto_updater.start_background_sync()
     
     print("🤖 Hệ thống V3.4 đang chạy...")
