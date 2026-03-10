@@ -30,6 +30,7 @@ report_mod = ReportModule()
 # KHỞI TẠO NÃO BỘ AI
 cfo_ai = AIChatModule()
 
+# Biến toàn cục lưu trạng thái người dùng (Đang ở Menu nào)
 user_context = {}
 
 def get_history_keyboard():
@@ -41,7 +42,7 @@ def get_history_keyboard():
 
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
-    user_context[message.chat.id] = 'HOME'
+    user_context[message.chat.id] = 'HOME' # Thoát khỏi phòng CFO
     bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
@@ -67,6 +68,7 @@ def show_group_report(message):
 # ==========================================
 @bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
 def show_overall_report(message):
+    user_context[message.chat.id] = 'REPORT'
     bot.send_message(message.chat.id, "⏳ Đang tổng hợp số liệu danh mục...", parse_mode="Markdown")
     msg, markup = report_mod.get_telegram_report()
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
@@ -100,6 +102,7 @@ def handle_export_excel(call):
 
 @bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
 def show_data_menu(message):
+    user_context[message.chat.id] = 'DATA'
     msg, markup = data_mod.get_menu_ui()
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
@@ -112,40 +115,31 @@ def handle_docs(message):
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
 # ==========================================
-# MODULE AI CFO (TRỢ LÝ TÀI CHÍNH)
+# MODULE AI CFO (VÀO PHÒNG CFO)
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
 def handle_cfo_ai_button(message):
+    # Đánh dấu sếp đã vào phòng CFO (Từ giờ chat tự nhiên không cần tiền tố)
+    user_context[message.chat.id] = 'AI_CHAT' 
+    
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
         auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
         response = cfo_ai.chat_with_cfo(auto_prompt)
+        
+        # Thêm hướng dẫn chat tự nhiên
+        response += "\n\n💡 _(Sếp đang ở trong phòng CFO. Sếp có thể chat, hỏi đáp tự nhiên ngay tại đây mà không cần gõ thêm lệnh gì cả. Bấm nút Menu khác để thoát)._"
+        
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
-
-@bot.message_handler(func=lambda message: message.text.lower().startswith(('cfo ', 'ai ', '?')))
-def handle_cfo_ai_text(message):
-    text = message.text
-    if text.startswith('?'):
-        user_query = text[1:].strip()
-    elif text.lower().startswith('ai '):
-        user_query = text[3:].strip()
-    else:
-        user_query = text[4:].strip()
-        
-    msg = bot.send_message(message.chat.id, "⏳ CFO đang phân tích số liệu...")
-    try:
-        response = cfo_ai.chat_with_cfo(user_query)
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
-    except Exception as e:
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
 
 # ==========================================
 # MODULE LỊCH SỬ
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
 def show_history(message):
+    user_context[message.chat.id] = 'HISTORY'
     bot.send_message(message.chat.id, "🗄️ **ĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
     msg, markup = hist_mod.get_history_ui(page=1, filter_type='ALL')
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
@@ -184,7 +178,7 @@ def handle_history_callbacks(call):
         bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 # ==========================================
-# PARSER NHẬN DIỆN LỆNH GÕ TAY
+# PARSER NHẬN DIỆN LỆNH GÕ TAY (MUA/BÁN/NẠP/RÚT)
 # ==========================================
 @bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
 def trade_ins(message):
@@ -263,6 +257,37 @@ def handle_manual_commands(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Lỗi: {str(e)}")
 
+# ==========================================
+# CATCH-ALL: NHẬN DIỆN CHAT TỰ NHIÊN VỚI CFO (PHẢI ĐỂ CUỐI CÙNG)
+# ==========================================
+@bot.message_handler(func=lambda message: True)
+def handle_fallback_and_ai_chat(message):
+    if not message.text: return
+    text = message.text
+    user_query = None
+    
+    # 1. Nhận diện nếu user có dùng tiền tố (gọi nhanh CFO từ bất kỳ đâu)
+    if text.startswith('?'):
+        user_query = text[1:].strip()
+    elif text.lower().startswith('ai '):
+        user_query = text[3:].strip()
+    elif text.lower().startswith('cfo '):
+        user_query = text[4:].strip()
+    # 2. Nhận diện nếu user đang ở trong phòng CFO (không cần tiền tố)
+    elif user_context.get(message.chat.id) == 'AI_CHAT':
+        user_query = text.strip()
+        
+    # Nếu là câu hỏi dành cho AI
+    if user_query:
+        msg = bot.send_message(message.chat.id, "⏳ CFO đang suy nghĩ...")
+        try:
+            response = cfo_ai.chat_with_cfo(user_query)
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
+        except Exception as e:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
+    else:
+        # Nếu gõ linh tinh mà không ở trong phòng CFO
+        bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để nhờ CFO tư vấn.")
+
 if __name__ == "__main__":
     bot.polling(none_stop=True)
-
