@@ -1,295 +1,152 @@
-# main.py
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
-from backend.telegram.bot_client import bot
-from backend.telegram.keyboards import get_home_keyboard, get_stock_keyboard, get_crypto_keyboard
+# backend/modules/ai_chat.py
+import os
+import json
+import requests
+import google.generativeai as genai
 from backend.database.repository import DatabaseRepo
-from backend.modules.dashboard import DashboardModule
-from backend.modules.stock import StockModule
-from backend.modules.wallet import WalletModule
-from backend.modules.crypto import CryptoModule
-from backend.modules.data_manager import DataManagerModule
-from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
-from backend.core.parser import parse_currency, parse_trade_command
 
-# IMPORT MODULE AI CFO MỚI
-from backend.modules.ai_chat import AIChatModule
-
-db = DatabaseRepo()
-dash = DashboardModule()
-stock_mod = StockModule()
-crypto_mod = CryptoModule()
-wallet_mod = WalletModule()
-data_mod = DataManagerModule()
-hist_mod = HistoryModule()
-report_mod = ReportModule()
-
-# KHỞI TẠO NÃO BỘ AI
-cfo_ai = AIChatModule()
-
-# Biến toàn cục lưu trạng thái người dùng (Đang ở Menu nào)
-user_context = {}
-
-def get_history_keyboard():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("💵 LS Nạp/Rút"), KeyboardButton("📊 LS Chứng khoán"))
-    markup.row(KeyboardButton("🪙 LS Crypto"), KeyboardButton("🥇 LS Khác"))
-    markup.row(KeyboardButton("🔍 Tìm kiếm LS"), KeyboardButton("🔙 Đóng Menu"))
-    return markup
-
-@bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
-def show_home(message):
-    user_context[message.chat.id] = 'HOME' # Thoát khỏi phòng CFO
-    bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
-
-@bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
-def show_stock(message):
-    user_context[message.chat.id] = 'STOCK'
-    bot.send_message(message.chat.id, stock_mod.get_dashboard(), reply_markup=get_stock_keyboard())
-
-@bot.message_handler(func=lambda message: message.text in ["🪙 Crypto", "🟡 Crypto"])
-def show_crypto(message):
-    user_context[message.chat.id] = 'CRYPTO'
-    bot.send_message(message.chat.id, crypto_mod.get_dashboard(), reply_markup=get_crypto_keyboard())
-
-@bot.message_handler(func=lambda message: message.text == "📈 Báo cáo nhóm")
-def show_group_report(message):
-    ctx = user_context.get(message.chat.id, 'STOCK')
-    if ctx == 'CRYPTO':
-        bot.send_message(message.chat.id, crypto_mod.get_group_report())
-    else:
-        bot.send_message(message.chat.id, stock_mod.get_group_report())
-
-# ==========================================
-# MODULE REPORT & XUẤT EXCEL / CHART
-# ==========================================
-@bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
-def show_overall_report(message):
-    user_context[message.chat.id] = 'REPORT'
-    bot.send_message(message.chat.id, "⏳ Đang tổng hợp số liệu danh mục...", parse_mode="Markdown")
-    msg, markup = report_mod.get_telegram_report()
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'view_nav_chart')
-def handle_view_chart(call):
-    bot.answer_callback_query(call.id, "⏳ Đang vẽ biểu đồ. Sếp đợi vài giây nhé...")
-    try:
-        chart_bytes = report_mod.generate_chart_bytes()
-        bot.send_photo(
-            call.message.chat.id, 
-            photo=chart_bytes, 
-            caption="📈 **BIỂU ĐỒ VỐN NẠP RÒNG & TÀI SẢN THỰC TẾ**\nKhoảng cách giữa điểm màu đỏ và đường màu xanh chính là Lãi/Lỗ hiện tại của Sếp!",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Lỗi khi vẽ biểu đồ: {str(e)}")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'export_excel_report')
-def handle_export_excel(call):
-    bot.answer_callback_query(call.id, "Đang tạo file Excel. Vui lòng đợi...")
-    try:
-        excel_bytes = report_mod.generate_excel_bytes()
-        bot.send_document(
-            call.message.chat.id, 
-            document=("Bao_Cao_V3.4.xlsx", excel_bytes), 
-            caption="✅ File báo cáo Excel của Sếp đây ạ!"
-        )
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Lỗi khi xuất file: {str(e)}")
-
-@bot.message_handler(func=lambda message: message.text in ["📥 EXPORT/IMPORT", "💾 Dữ liệu"])
-def show_data_menu(message):
-    user_context[message.chat.id] = 'DATA'
-    msg, markup = data_mod.get_menu_ui()
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(content_types=['document'])
-def handle_docs(message):
-    if message.document.file_name.endswith('.json'):
-        bot.reply_to(message, "⏳ Đang phân tích sổ sách tài chính...")
-        data_mod.handle_document(bot, message)
-    else:
-        bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
-
-# ==========================================
-# MODULE AI CFO (VÀO PHÒNG CFO)
-# ==========================================
-@bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
-def handle_cfo_ai_button(message):
-    # Đánh dấu sếp đã vào phòng CFO (Từ giờ chat tự nhiên không cần tiền tố)
-    user_context[message.chat.id] = 'AI_CHAT' 
-    
-    msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
-    try:
-        auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
-        response = cfo_ai.chat_with_cfo(auto_prompt)
+class AIChatModule:
+    def __init__(self):
+        self.db = DatabaseRepo()
+        self.report = ReportModule()
         
-        # Thêm hướng dẫn chat tự nhiên
-        response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
+        # Lấy danh sách API Keys từ .env
+        keys_env = os.environ.get("GEMINI_API_KEYS", "")
+        self.api_keys = [k.strip() for k in keys_env.split(",") if k.strip()]
+        self.current_key_idx = 0
+
+    def _get_configured_model(self):
+        if not self.api_keys:
+            raise ValueError("⚠️ Chưa cấu hình GEMINI_API_KEYS trong file .env")
         
-        # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
-    except Exception as e:
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
-
-# ==========================================
-# MODULE LỊCH SỬ
-# ==========================================
-@bot.message_handler(func=lambda message: message.text in ["📜 Lịch sử", "/history"])
-def show_history(message):
-    user_context[message.chat.id] = 'HISTORY'
-    bot.send_message(message.chat.id, "🗄️ **ĐÃ MỞ TRUNG TÂM LƯU TRỮ**\n👇 Sử dụng menu bên dưới để lọc giao dịch:", reply_markup=get_history_keyboard(), parse_mode="Markdown")
-    msg, markup = hist_mod.get_history_ui(page=1, filter_type='ALL')
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text in ["💵 LS Nạp/Rút", "📊 LS Chứng khoán", "🪙 LS Crypto", "🥇 LS Khác"])
-def handle_history_filters(message):
-    filter_map = {
-        "💵 LS Nạp/Rút": "CASH",
-        "📊 LS Chứng khoán": "STOCK",
-        "🪙 LS Crypto": "CRYPTO",
-        "🥇 LS Khác": "OTHER"
-    }
-    f_type = filter_map[message.text]
-    msg, markup = hist_mod.get_history_ui(page=1, filter_type=f_type)
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text == "🔍 Tìm kiếm LS")
-def history_search_guide(message):
-    bot.send_message(message.chat.id, "🔍 **HƯỚNG DẪN TÌM KIẾM NHANH**\n\nGõ lệnh:\n👉 `his [MÃ]` (VD: `his VPB`)\n👉 `his nap` (Xem lịch sử Nạp)\n👉 `his rut` (Xem lịch sử Rút)", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text == "🔙 Đóng Menu")
-def close_history_menu(message):
-    bot.send_message(message.chat.id, "✅ Đã đóng Menu Lịch sử.", reply_markup=get_home_keyboard())
-    show_home(message)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('his_') or call.data == 'ignore')
-def handle_history_callbacks(call):
-    if call.data == 'ignore':
-        bot.answer_callback_query(call.id, "⚠️ Bạn đang ở ranh giới trang (đầu/cuối) rồi!", show_alert=False)
-        return
-    parts = call.data.split('_')
-    if parts[1] == 'p': 
-        page, filter_type = int(parts[2]), parts[3]
-        symbol = parts[4] if parts[4] != 'NONE' else None
-        msg, markup = hist_mod.get_history_ui(page, filter_type, symbol)
-        bot.edit_message_text(msg, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
-# ==========================================
-# PARSER NHẬN DIỆN LỆNH GÕ TAY (MUA/BÁN/NẠP/RÚT)
-# ==========================================
-@bot.message_handler(func=lambda message: message.text == "➕ Giao dịch")
-def trade_ins(message):
-    bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
-def refresh_ins(message):
-    bot.reply_to(message, "🔄 **CẬP NHẬT GIÁ NHANH**\nCú pháp: `up [MÃ] [GIÁ]`", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ']))
-def handle_manual_commands(message):
-    text = message.text.lower().strip()
-    try:
-        if text.startswith('his '):
-            parts = text.split()
-            if len(parts) > 1:
-                term = parts[1].upper()
-                if term in ['NAP', 'RUT', 'CASH']: 
-                    msg, markup = hist_mod.get_history_ui(filter_type='CASH')
-                elif term in ['STOCK', 'CK', 'CHUNGKHOAN']: 
-                    msg, markup = hist_mod.get_history_ui(filter_type='STOCK')
-                elif term in ['CRYPTO', 'COIN']: 
-                    msg, markup = hist_mod.get_history_ui(filter_type='CRYPTO')
-                elif term in ['KHAC', 'OTHER']: 
-                    msg, markup = hist_mod.get_history_ui(filter_type='OTHER')
-                else: 
-                    msg, markup = hist_mod.get_history_ui(symbol=term)
-                
-                bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
-                
-        elif text.startswith('del '):
-            sym = text.split()[1].upper()
-            _, msg_text = db.delete_holding_and_refund(sym)
-            bot.reply_to(message, msg_text, parse_mode="Markdown")
-
-        elif text.startswith('rate crypto '):
-            val = float(text.replace('rate crypto ', '').strip())
-            db.execute_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('crypto_rate', ?)", (val,))
-            bot.reply_to(message, f"✅ Đã cập nhật tỷ giá: 1 USD = {val:,.0f} đ")
+        genai.configure(api_key=self.api_keys[self.current_key_idx])
         
-        elif text.startswith(('nap ', 'rut ', 'chuyen ', 'thu ')):
-            bot.reply_to(message, wallet_mod.handle_fund_command(message.text))
-
-        elif text.startswith('k '):
-            parts = text.split()
-            name, val = parts[1].upper(), parse_currency(" ".join(parts[2:]))
-            db.update_other_asset(name, val)
-            bot.reply_to(message, f"✅ Ghi nhận {name}: {val:,.0f} đ")
-
-        elif text.startswith('up '):
-            parts = text.split()
-            sym, p = parts[1].upper(), float(parts[2])
-            real_p = p * 1000 if (p < 1000 and sym not in ['BTC', 'ETH', 'SOL', 'BNB']) else p
-            db.update_market_price(sym, real_p)
-            bot.reply_to(message, f"✅ {sym} = {real_p:,.2f}")
-
-        elif text.startswith(('s ', 'c ')):
-            parsed = parse_trade_command(text)
-            if not parsed: return
-            w_type, sym, qty, price = parsed
-            if w_type == 'STOCK' and price < 1000: price *= 1000
-            
-            rate = 1
-            if w_type == 'CRYPTO':
-                r_row = db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
-                rate = float(r_row['value']) if r_row else 25000.0
-
-            total_vnd = abs(qty) * price * rate
-            res = db.execute_trade(w_type, sym, qty, price, total_vnd)
-            
-            sl_str = f"{abs(qty)}" if w_type == 'CRYPTO' else f"{abs(qty):,.0f}"
-            msg = f"✅ Khớp {'MUA' if qty>0 else 'BÁN'} {sl_str} {sym}"
-            if qty < 0: msg += f"\n💰 Lãi chốt: {res:,.0f} đ"
-            bot.reply_to(message, msg)
-
-    except Exception as e:
-        bot.reply_to(message, f"❌ Lỗi: {str(e)}")
-
-# ==========================================
-# CATCH-ALL: NHẬN DIỆN CHAT TỰ NHIÊN VỚI CFO (PHẢI ĐỂ CUỐI CÙNG)
-# ==========================================
-@bot.message_handler(func=lambda message: True)
-def handle_fallback_and_ai_chat(message):
-    if not message.text: return
-    text = message.text
-    user_query = None
-    
-    # 1. Nhận diện nếu user có dùng tiền tố (gọi nhanh CFO từ bất kỳ đâu)
-    if text.startswith('?'):
-        user_query = text[1:].strip()
-    elif text.lower().startswith('ai '):
-        user_query = text[3:].strip()
-    elif text.lower().startswith('cfo '):
-        user_query = text[4:].strip()
-    # 2. Nhận diện nếu user đang ở trong phòng CFO (không cần tiền tố)
-    elif user_context.get(message.chat.id) == 'AI_CHAT':
-        user_query = text.strip()
-        
-    # Nếu là câu hỏi dành cho AI
-    if user_query:
-        msg = bot.send_message(message.chat.id, "⏳ CFO đang suy nghĩ...")
+        # TỰ ĐỘNG DÒ TÌM MODEL PHÙ HỢP
+        target_model = None
         try:
-            response = cfo_ai.chat_with_cfo(user_query)
-            # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
+            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            preferred_models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro', 'models/gemini-1.0-pro']
+            
+            for pref in preferred_models:
+                if pref in available_models:
+                    target_model = pref
+                    break
+            
+            if not target_model and available_models:
+                target_model = available_models[0]
+                
         except Exception as e:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
-    else:
-        # Nếu gõ linh tinh mà không ở trong phòng CFO
-        bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để nhờ CFO tư vấn.")
+            target_model = 'models/gemini-pro'
 
-if __name__ == "__main__":
-    bot.polling(none_stop=True)
+        if not target_model:
+            raise ValueError("Không tìm thấy model Gemini hợp lệ.")
+
+        return genai.GenerativeModel(target_model)
+
+    def _switch_to_next_key(self):
+        self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+
+    def _get_realtime_price(self, symbol, wallet_type):
+        """Hàm tự động kết nối Internet lấy giá thị trường Real-time"""
+        try:
+            if wallet_type == 'CRYPTO':
+                # Gọi API Binance
+                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
+                if res.status_code == 200:
+                    return float(res.json()['price'])
+            
+            elif wallet_type == 'STOCK':
+                # Gọi API Chứng khoán VN (TCBS)
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=3)
+                if res.status_code == 200:
+                    data = res.json()
+                    price = data.get('price', 0)
+                    # Xử lý giá nếu API trả về số nhỏ (TCBS thỉnh thoảng trả giá thực vd: 27000)
+                    return float(price)
+        except Exception as e:
+            print(f"[AI WARN] Không thể lấy giá realtime cho {symbol}: {e}")
+            
+        return None # Trả về None nếu rớt mạng hoặc mã không tồn tại
+
+    def get_portfolio_context(self):
+        stats = self.report._process_data()
+        raw_data = stats['raw_data']
+        
+        tot = stats['total_assets'] if stats['total_assets'] > 0 else 1
+        cash_val = stats['wallets']['CASH']['balance']
+        stock_val = stats['wallets']['STOCK']['assets'] + stats['wallets']['STOCK']['balance']
+        crypto_val = stats['wallets']['CRYPTO']['assets'] + stats['wallets']['CRYPTO']['balance']
+        
+        # BÓC TÁCH CHI TIẾT & CHÈN GIÁ REAL-TIME VÀO BÁO CÁO CHO AI
+        chi_tiet = []
+        for h in raw_data['holdings']:
+            sym = h['symbol']
+            w_type = h['wallet_id']
+            gia_database = h['current_price']
+            
+            # Cố gắng lấy giá trên mạng trước
+            gia_realtime = self._get_realtime_price(sym, w_type)
+            
+            # Nếu trên mạng có giá thì dùng, nếu rớt mạng thì lôi giá cũ trong Database ra dùng tạm
+            gia_chot = gia_realtime if gia_realtime else gia_database
+            
+            chi_tiet.append({
+                "ma_tai_san": sym,
+                "loai_tai_san": w_type,
+                "so_luong": h['quantity'],
+                "gia_von_trung_binh_sach": h['average_price'],
+                "gia_thi_truong_hien_tai": gia_chot,
+                "nguon_cap_gia": "Real-time Internet" if gia_realtime else "Database Offline"
+            })
+            
+        context = {
+            "hieu_suat": {
+                "tong_NAV": stats['total_assets'],
+                "max_drawdown": stats['max_drawdown'],
+            },
+            "ty_trong_hien_tai": {
+                "CASH": f"{cash_val} ({cash_val/tot*100:.1f}%)",
+                "STOCK": f"{stock_val} ({stock_val/tot*100:.1f}%)",
+                "CRYPTO": f"{crypto_val} ({crypto_val/tot*100:.1f}%)"
+            },
+            "chi_tiet_danh_muc": chi_tiet
+        }
+        return context
+
+    def chat_with_cfo(self, user_message):
+        context_data = self.get_portfolio_context()
+        
+        system_prompt = f"""
+        Bạn là Giám đốc Tài chính (CFO) kiêm Chuyên gia Phân tích Đầu tư của Hệ điều hành V3.4.
+        Tính cách: Sắc bén, thực dụng, phân tích logic như Phố Wall. Gọi người dùng là "sếp".
+        
+        DỮ LIỆU DANH MỤC THỰC TẾ (Đã được Bot cập nhật giá Real-time từ Internet):
+        {json.dumps(context_data, ensure_ascii=False)}
+        
+        KỶ LUẬT TRẢ LỜI (BẮT BUỘC):
+        1. VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG dùng Markdown (không dùng dấu sao *, gạch dưới _, ngoặc vuông []). Chỉ dùng chữ và gạch đầu dòng (-).
+        2. NGẮN GỌN: Tối đa 3 đoạn. Đi thẳng vào vấn đề sếp hỏi.
+        
+        HƯỚNG DẪN PHÂN TÍCH:
+        - So sánh ngay [gia_von_trung_binh_sach] với [gia_thi_truong_hien_tai] để xem sếp đang lỗ hay lãi. Tính ra % luôn.
+        - Phân tích rủi ro của mã đó dựa trên hiểu biết tài chính của bạn (Ngân hàng, BĐS, Coin...).
+        - Khuyên chiến lược hành động: Nắm giữ chờ hồi / Cắt lỗ hạ tỷ trọng / Mua trung bình giá.
+        """
+
+        for _ in range(len(self.api_keys)):
+            try:
+                model = self._get_configured_model()
+                response = model.generate_content(f"{system_prompt}\n\n[Lệnh từ Sếp]: {user_message}")
+                return response.text
+            
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
+                    self._switch_to_next_key()
+                    continue 
+                else:
+                    return f"❌ [Lỗi CFO] LLM gặp sự cố: {str(e)}"
+                    
+        return "❌ [Lỗi CFO] Toàn bộ kho API Keys đã cạn kiệt Quota ngày hôm nay!"
