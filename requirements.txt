@@ -6,4 +6,4 @@ matplotlib
 Pillow
 numpy
 scipy
-
+google-generativeai
