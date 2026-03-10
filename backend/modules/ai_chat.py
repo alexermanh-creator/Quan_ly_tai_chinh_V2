@@ -19,16 +19,12 @@ class AIChatModule:
         if not self.api_keys:
             raise ValueError("⚠️ Chưa cấu hình GEMINI_API_KEYS trong file .env")
         
-        # Cấu hình API Key hiện hành
         genai.configure(api_key=self.api_keys[self.current_key_idx])
         
-        # TỰ ĐỘNG DÒ TÌM MODEL PHÙ HỢP (AUTO-DISCOVERY)
+        # TỰ ĐỘNG DÒ TÌM MODEL PHÙ HỢP
         target_model = None
         try:
-            # Lấy danh sách tất cả các model hỗ trợ sinh text (generateContent)
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            
-            # Danh sách ưu tiên từ xịn/nhanh nhất trở xuống
             preferred_models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro', 'models/gemini-1.0-pro']
             
             for pref in preferred_models:
@@ -36,42 +32,42 @@ class AIChatModule:
                     target_model = pref
                     break
             
-            # Nếu không có model nào trong list ưu tiên, lấy đại model đầu tiên hỗ trợ chat
             if not target_model and available_models:
                 target_model = available_models[0]
                 
         except Exception as e:
-            # Fallback an toàn phòng khi hàm list_models bị chặn
             target_model = 'models/gemini-pro'
 
         if not target_model:
-            raise ValueError("Không tìm thấy model Gemini hợp lệ cho API Key này.")
+            raise ValueError("Không tìm thấy model Gemini hợp lệ.")
 
-        print(f"[AI INFO] Đã kết nối thành công với model: {target_model}")
         return genai.GenerativeModel(target_model)
 
     def _switch_to_next_key(self):
-        """Xoay vòng API Key nếu hết Quota"""
-        old_idx = self.current_key_idx
         self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
-        print(f"[AI INFO] Chuyển từ API Key {old_idx} sang API Key {self.current_key_idx}")
 
     def get_portfolio_context(self):
         stats = self.report._process_data()
+        
+        # Tính toán nhanh tỷ trọng thực tế để gửi cho AI
+        tot = stats['total_assets'] if stats['total_assets'] > 0 else 1
+        cash_val = stats['wallets']['CASH']['balance']
+        stock_val = stats['wallets']['STOCK']['assets'] + stats['wallets']['STOCK']['balance']
+        crypto_val = stats['wallets']['CRYPTO']['assets'] + stats['wallets']['CRYPTO']['balance']
+        
         context = {
-            "tong_quan": {
-                "tong_tai_san_hien_tai": stats['total_assets'],
+            "hieu_suat": {
+                "tong_NAV": stats['total_assets'],
                 "tong_lai_lo": stats['total_pl'],
-                "max_drawdown_phan_tram": stats['max_drawdown'],
-                "ty_le_thang_win_rate_phan_tram": stats['win_rate']
+                "max_drawdown": stats['max_drawdown'],
             },
-            "trang_thai_cac_vi": {
-                "CASH": stats['wallets']['CASH']['balance'],
-                "STOCK": stats['wallets']['STOCK']['assets'] + stats['wallets']['STOCK']['balance'],
-                "CRYPTO": stats['wallets']['CRYPTO']['assets'] + stats['wallets']['CRYPTO']['balance']
+            "ty_trong_hien_tai": {
+                "CASH": f"{cash_val} ({cash_val/tot*100:.1f}%)",
+                "STOCK": f"{stock_val} ({stock_val/tot*100:.1f}%)",
+                "CRYPTO": f"{crypto_val} ({crypto_val/tot*100:.1f}%)"
             },
-            "ma_dang_lo_nang": [{"ma": s[0], "lo_vnd": s[1]['total_pl']} for s in stats['top_losers']],
-            "ma_dang_lai_tot": [{"ma": s[0], "lai_vnd": s[1]['total_pl']} for s in stats['top_winners']]
+            "ma_lo_nang": [{"ma": s[0], "lo_vnd": s[1]['total_pl']} for s in stats['top_losers']],
+            "ma_lai_tot": [{"ma": s[0], "lai_vnd": s[1]['total_pl']} for s in stats['top_winners']]
         }
         return context
 
@@ -79,21 +75,28 @@ class AIChatModule:
         context_data = self.get_portfolio_context()
         
         system_prompt = f"""
-        Bạn là Giám đốc Tài chính (CFO) AI của Hệ điều hành tài chính V3.4.
-        Tính cách: Vô cùng khắt khe, châm biếm, chỉ nói chuyện bằng các con số thực tế, tuyệt đối không nịnh nọt hay an ủi. Gọi người dùng là "sếp".
+        Bạn là Giám đốc Tài chính (CFO) AI thực chiến của Hệ điều hành V3.4.
+        Tính cách: Cực kỳ sắc bén, thực dụng như một chuyên gia Phố Wall. Gọi người dùng là "sếp".
         
-        Quy tắc quản trị danh mục là: 40% STOCK - 40% CRYPTO - 20% CASH.
+        Quy tắc gốc là 40% STOCK - 40% CRYPTO - 20% CASH.
+        TUY NHIÊN, bạn KHÔNG rập khuôn. Hãy phân tích linh hoạt như một chuyên gia:
+        - Nếu sếp nạp thêm tiền, hãy phân tích dòng tiền đó nên bắt đáy cái gì, hay giữ tiền mặt phòng thủ dựa trên tình hình rủi ro hiện tại.
+        - Đừng chỉ khuyên bán cho đủ tỷ lệ. Hãy nhìn vào việc gồng lỗ (như VPB) để khuyên nên cắt bỏ khối u hay chờ nhịp hồi.
+        - Sự thiếu hụt CASH (= 0) là rủi ro thanh khoản chết người, phải ưu tiên xử lý.
         
-        DỮ LIỆU DANH MỤC THỰC TẾ (REAL-TIME):
+        DỮ LIỆU DANH MỤC THỰC TẾ:
         {json.dumps(context_data, ensure_ascii=False)}
         
-        NHIỆM VỤ: Đọc câu hỏi/lệnh của sếp. Nhìn vào dữ liệu để phân tích thẳng thắn. Chỉ trích gay gắt nếu tỷ trọng mất cân bằng, gồng lỗ nặng (như con VPB), hoặc thiếu tiền mặt CASH.
+        KỶ LUẬT TRẢ LỜI (BẮT BUỘC):
+        1. SIÊU NGẮN GỌN (tối đa 4-5 câu). Đi thẳng vào trọng tâm hành động.
+        2. TUYỆT ĐỐI KHÔNG lặp lại dài dòng các con số thống kê (vì sếp đã nhìn thấy trên màn hình). Chỉ lôi con số ra khi cần làm bằng chứng đanh thép.
+        3. Phân tích sắc sảo, đưa ra lời khuyên thực chiến cho câu hỏi của sếp. Không nói đạo lý rỗng tuếch.
         """
 
         for _ in range(len(self.api_keys)):
             try:
                 model = self._get_configured_model()
-                response = model.generate_content(f"{system_prompt}\n\n[Lệnh từ Sếp]: {user_message}")
+                response = model.generate_content(f"{system_prompt}\n\n[Sếp hỏi/Lệnh]: {user_message}")
                 return response.text
             
             except Exception as e:
