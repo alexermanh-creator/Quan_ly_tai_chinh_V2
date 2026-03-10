@@ -15,6 +15,9 @@ from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
 from backend.core.parser import parse_currency, parse_trade_command
 
+# IMPORT MODULE AI CFO MỚI
+from backend.modules.ai_chat import AIChatModule
+
 db = DatabaseRepo()
 dash = DashboardModule()
 stock_mod = StockModule()
@@ -23,6 +26,9 @@ wallet_mod = WalletModule()
 data_mod = DataManagerModule()
 hist_mod = HistoryModule()
 report_mod = ReportModule()
+
+# KHỞI TẠO NÃO BỘ AI
+cfo_ai = AIChatModule()
 
 user_context = {}
 
@@ -104,6 +110,36 @@ def handle_docs(message):
         data_mod.handle_document(bot, message)
     else:
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
+
+# ==========================================
+# MODULE AI CFO (TRỢ LÝ TÀI CHÍNH)
+# ==========================================
+@bot.message_handler(func=lambda message: message.text == "🤖 Trợ lý AI")
+def handle_cfo_ai_button(message):
+    msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
+    try:
+        auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
+        response = cfo_ai.chat_with_cfo(auto_prompt)
+        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
+    except Exception as e:
+        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
+
+@bot.message_handler(func=lambda message: message.text.lower().startswith(('cfo ', 'ai ', '?')))
+def handle_cfo_ai_text(message):
+    text = message.text
+    if text.startswith('?'):
+        user_query = text[1:].strip()
+    elif text.lower().startswith('ai '):
+        user_query = text[3:].strip()
+    else:
+        user_query = text[4:].strip()
+        
+    msg = bot.send_message(message.chat.id, "⏳ CFO đang phân tích số liệu...")
+    try:
+        response = cfo_ai.chat_with_cfo(user_query)
+        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
+    except Exception as e:
+        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
 
 # ==========================================
 # MODULE LỊCH SỬ
