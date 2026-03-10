@@ -14,9 +14,10 @@ from backend.modules.data_manager import DataManagerModule
 from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
 from backend.core.parser import parse_currency, parse_trade_command
-
-# IMPORT MODULE AI CFO MỚI
 from backend.modules.ai_chat import AIChatModule
+
+# IMPORT MODULE CẬP NHẬT GIÁ NGẦM
+from backend.modules.price_updater import PriceUpdaterModule
 
 db = DatabaseRepo()
 dash = DashboardModule()
@@ -29,6 +30,9 @@ report_mod = ReportModule()
 
 # KHỞI TẠO NÃO BỘ AI
 cfo_ai = AIChatModule()
+
+# KHỞI TẠO ĐỘNG CƠ ĐỒNG BỘ GIÁ (Cài đặt 30 phút quét 1 lần)
+auto_updater = PriceUpdaterModule(interval_minutes=30)
 
 # Biến toàn cục lưu trạng thái người dùng (Đang ở Menu nào)
 user_context = {}
@@ -119,18 +123,14 @@ def handle_docs(message):
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
 def handle_cfo_ai_button(message):
-    # Đánh dấu sếp đã vào phòng CFO (Từ giờ chat tự nhiên không cần tiền tố)
     user_context[message.chat.id] = 'AI_CHAT' 
     
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
         auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
         response = cfo_ai.chat_with_cfo(auto_prompt)
-        
-        # Thêm hướng dẫn chat tự nhiên
         response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
         
-        # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
@@ -267,29 +267,28 @@ def handle_fallback_and_ai_chat(message):
     text = message.text
     user_query = None
     
-    # 1. Nhận diện nếu user có dùng tiền tố (gọi nhanh CFO từ bất kỳ đâu)
     if text.startswith('?'):
         user_query = text[1:].strip()
     elif text.lower().startswith('ai '):
         user_query = text[3:].strip()
     elif text.lower().startswith('cfo '):
         user_query = text[4:].strip()
-    # 2. Nhận diện nếu user đang ở trong phòng CFO (không cần tiền tố)
     elif user_context.get(message.chat.id) == 'AI_CHAT':
         user_query = text.strip()
         
-    # Nếu là câu hỏi dành cho AI
     if user_query:
-        msg = bot.send_message(message.chat.id, "⏳ CFO đang suy nghĩ...")
+        msg = bot.send_message(message.chat.id, "⏳ Hệ thống đang suy nghĩ...")
         try:
             response = cfo_ai.chat_with_cfo(user_query)
-            # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
         except Exception as e:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API: {str(e)}")
     else:
-        # Nếu gõ linh tinh mà không ở trong phòng CFO
-        bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để nhờ CFO tư vấn.")
+        bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để AI hỗ trợ.")
 
 if __name__ == "__main__":
+    # KÍCH HOẠT CHẠY NGẦM AUTO-SYNC GIÁ TRƯỚC KHI BOT CHẠY
+    auto_updater.start_background_sync()
+    
+    print("🤖 Hệ thống V3.4 đang chạy...")
     bot.polling(none_stop=True)
