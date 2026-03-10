@@ -7,3 +7,4 @@ Pillow
 numpy
 scipy
 google-generativeai
+yfinance==0.2.37
