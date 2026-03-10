@@ -1,7 +1,9 @@
 # backend/modules/ai_chat.py
 import os
 import json
+import time
 import requests
+import re
 import google.generativeai as genai
 from backend.database.repository import DatabaseRepo
 from backend.modules.report import ReportModule
@@ -46,37 +48,31 @@ class AIChatModule:
     def _get_realtime_price(self, symbol, wallet_type):
         """Hệ thống lấy giá xuyên tường lửa (Sử dụng API Global)"""
         try:
-            # Header giả lập trình duyệt thật để vượt bot detection
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             symbol = symbol.upper().strip()
 
             if wallet_type == 'CRYPTO':
-                # Gọi API Binance (Toàn cầu - Không chặn)
-                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
+                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=4)
                 if res.status_code == 200:
                     return float(res.json()['price'])
             
             elif wallet_type == 'STOCK':
-                # --- TẦNG 1: YAHOO FINANCE REST API (Bất tử trước tường lửa VN) ---
+                # YAHOO FINANCE
                 try:
-                    # Mã chứng khoán VN trên Yahoo phải có đuôi .VN (VD: VPB.VN)
                     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?region=US&lang=en-US"
-                    res = requests.get(url, headers=headers, timeout=5)
+                    res = requests.get(url, headers=headers, timeout=4)
                     if res.status_code == 200:
-                        data = res.json()
-                        # Bóc tách giá từ chuỗi JSON siêu sâu của Yahoo
-                        price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+                        price = float(res.json()['chart']['result'][0]['meta']['regularMarketPrice'])
                         if price > 0:
-                            # Yahoo thường trả giá trị thực (25500), nếu trả 25.5 thì tự x1000
                             return price if price >= 1000 else price * 1000
-                except Exception as e:
-                    print(f"[AI INFO] Yahoo Finance trượt: {e}")
+                except Exception:
+                    pass
 
-                # --- TẦNG 2: TCBS API (Dự phòng nếu chạy Bot tại VN) ---
+                # TCBS API
                 try:
-                    res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=4)
+                    res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=3)
                     if res.status_code == 200:
                         price = float(res.json().get('price', 0))
                         if price > 0:
@@ -85,9 +81,9 @@ class AIChatModule:
                     pass
 
         except Exception as e:
-            print(f"[AI WARN] Lỗi hệ thống dò giá: {e}")
+            print(f"[AI WARN] Lỗi dò giá {symbol}: {e}")
             
-        return None # Nếu tất cả sập thì mới dùng Offline
+        return None
 
     def get_portfolio_context(self):
         stats = self.report._process_data()
@@ -104,18 +100,15 @@ class AIChatModule:
             w_type = h['wallet_id']
             gia_database = h['current_price']
             
-            # Quét giá mạng Real-time qua API Global
             gia_realtime = self._get_realtime_price(sym, w_type)
             gia_chot = gia_realtime if gia_realtime else gia_database
-            nguon = "TRỰC TIẾP TRÊN SÀN (Real-time)" if gia_realtime else "Sổ sách Offline"
             
             chi_tiet.append({
                 "ma_tai_san": sym,
                 "loai_tai_san": w_type,
                 "so_luong": h['quantity'],
-                "gia_von_trung_binh_sach": h['average_price'],
-                "gia_thi_truong_hien_tai": gia_chot,
-                "nguon_cap_gia": nguon
+                "gia_von": h['average_price'],
+                "gia_hien_tai": gia_chot
             })
             
         context = {
@@ -123,7 +116,7 @@ class AIChatModule:
                 "tong_NAV": stats['total_assets'],
                 "max_drawdown": stats['max_drawdown'],
             },
-            "ty_trong_hien_tai": {
+            "ty_trong": {
                 "CASH": f"{cash_val} ({cash_val/tot*100:.1f}%)",
                 "STOCK": f"{stock_val} ({stock_val/tot*100:.1f}%)",
                 "CRYPTO": f"{crypto_val} ({crypto_val/tot*100:.1f}%)"
@@ -135,20 +128,44 @@ class AIChatModule:
     def chat_with_cfo(self, user_message):
         context_data = self.get_portfolio_context()
         
+        # RADAR NHẬN DIỆN MÃ BÊN NGOÀI DANH MỤC
+        words = re.findall(r'\b[a-zA-Z]{3,5}\b', user_message)
+        stop_words = {'gia', 'hom', 'nay', 'thi', 'sao', 'cho', 'toi', 'cfo', 'lam', 'the', 'nao', 'mua', 'ban', 'hay', 'con', 'lai', 'nua', 'qua', 'voi', 'cua', 'nen', 'giu', 'cat', 'anh', 'nha', 'tien', 'mat', 'rut', 'nap', 'kho', 'tot', 'xau', 'cai', 'mot', 'hai', 'vay', 'nhe'}
+        potential_tickers = set([w.upper() for w in words if w.lower() not in stop_words])
+        
+        existing_tickers = [item['ma_tai_san'] for item in context_data.get('chi_tiet_danh_muc', [])]
+        
+        ma_ngoai = []
+        for sym in potential_tickers:
+            if sym not in existing_tickers:
+                # Ưu tiên dò bên sàn Chứng khoán trước, nếu không có thì qua Crypto
+                price = self._get_realtime_price(sym, 'STOCK')
+                if not price:
+                    price = self._get_realtime_price(sym, 'CRYPTO')
+                
+                if price:
+                    ma_ngoai.append({"ma": sym, "gia_hien_tai_vua_quet": price})
+                    
+        if ma_ngoai:
+            context_data["ma_ngoai_danh_muc_vua_hoi"] = ma_ngoai
+        
         system_prompt = f"""
         Bạn là Giám đốc Tài chính (CFO) kiêm Chuyên gia Đầu tư của Hệ điều hành V3.4.
-        Tính cách: Sắc bén, thực dụng, phân tích logic như Phố Wall. Gọi người dùng là "sếp".
+        Tính cách: Sắc bén, thực dụng, có tầm nhìn vĩ mô như Phố Wall. Gọi người dùng là "sếp".
         
-        DỮ LIỆU DANH MỤC THỰC TẾ (Đã được cập nhật Giá trị Real-time):
+        DỮ LIỆU DANH MỤC & MÃ SẾP VỪA HỎI:
         {json.dumps(context_data, ensure_ascii=False)}
         
         KỶ LUẬT TRẢ LỜI (BẮT BUỘC):
-        1. VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG dùng Markdown (không dùng dấu sao *, gạch dưới _, ngoặc vuông []). Chỉ dùng chữ và gạch đầu dòng (-).
-        2. NGẮN GỌN: Tối đa 3 đoạn. Đi thẳng vào vấn đề sếp hỏi.
+        1. VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG dùng Markdown (không dùng dấu *, _, []). Chỉ dùng chữ và gạch đầu dòng (-).
+        2. NGẮN GỌN: Tối đa 3 đoạn.
         
-        HƯỚNG DẪN PHÂN TÍCH:
-        - So sánh ngay [gia_von_trung_binh_sach] với [gia_thi_truong_hien_tai] để xem sếp đang lỗ hay lãi (Kèm theo số % cụ thể).
-        - Đưa ra góc nhìn thực chiến về rủi ro của mã đó để quyết định nên Gồng hay Cắt.
+        HƯỚNG DẪN PHÂN TÍCH THÔNG MINH:
+        - Nếu sếp hỏi một mã CÓ trong danh mục: So sánh giá vốn với giá hiện tại, đánh giá rủi ro, khuyên Gồng hay Cắt.
+        - Nếu sếp hỏi một mã KHÔNG CÓ trong danh mục (sẽ nằm ở mục 'ma_ngoai_danh_muc_vua_hoi'):
+          + Báo giá hiện tại của nó.
+          + Đóng vai trò chuyên gia, phân tích ngắn gọn tiềm năng của mã đó.
+          + Đối chiếu với danh mục hiện tại của sếp để gợi ý: "Có nên mở mua mới để đa dạng hóa không?" hay "Nên cẩn thận vì sếp đang ôm quá nhiều Stock rồi".
         """
 
         for _ in range(len(self.api_keys)):
