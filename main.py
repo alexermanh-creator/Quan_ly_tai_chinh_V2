@@ -114,7 +114,7 @@ def handle_docs(message):
 # ==========================================
 # MODULE AI CFO (TRỢ LÝ TÀI CHÍNH)
 # ==========================================
-@bot.message_handler(func=lambda message: message.text == "🤖 Trợ lý AI")
+@bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
 def handle_cfo_ai_button(message):
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
@@ -265,3 +265,4 @@ def handle_manual_commands(message):
 
 if __name__ == "__main__":
     bot.polling(none_stop=True)
+
