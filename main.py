@@ -128,9 +128,10 @@ def handle_cfo_ai_button(message):
         response = cfo_ai.chat_with_cfo(auto_prompt)
         
         # Thêm hướng dẫn chat tự nhiên
-        response += "\n\n💡 _(Sếp đang ở trong phòng CFO. Sếp có thể chat, hỏi đáp tự nhiên ngay tại đây mà không cần gõ thêm lệnh gì cả. Bấm nút Menu khác để thoát)._"
+        response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
         
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
+        # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
+        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
 
@@ -282,7 +283,8 @@ def handle_fallback_and_ai_chat(message):
         msg = bot.send_message(message.chat.id, "⏳ CFO đang suy nghĩ...")
         try:
             response = cfo_ai.chat_with_cfo(user_query)
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response, parse_mode='Markdown')
+            # ĐÃ BỎ parse_mode='Markdown' ĐỂ CHỐNG LỖI TELEGRAM
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
         except Exception as e:
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API CFO: {str(e)}")
     else:
