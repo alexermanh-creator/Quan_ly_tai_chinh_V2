@@ -128,7 +128,7 @@ class AIChatModule:
     def chat_with_cfo(self, user_message):
         context_data = self.get_portfolio_context()
         
-        # RADAR NHẬN DIỆN MÃ BÊN NGOÀI DANH MỤC
+        # RADAR NHẬN DIỆN MÃ TÀI SẢN (Dùng khi sếp hỏi giá thị trường)
         words = re.findall(r'\b[a-zA-Z]{3,5}\b', user_message)
         stop_words = {'gia', 'hom', 'nay', 'thi', 'sao', 'cho', 'toi', 'cfo', 'lam', 'the', 'nao', 'mua', 'ban', 'hay', 'con', 'lai', 'nua', 'qua', 'voi', 'cua', 'nen', 'giu', 'cat', 'anh', 'nha', 'tien', 'mat', 'rut', 'nap', 'kho', 'tot', 'xau', 'cai', 'mot', 'hai', 'vay', 'nhe'}
         potential_tickers = set([w.upper() for w in words if w.lower() not in stop_words])
@@ -138,7 +138,6 @@ class AIChatModule:
         ma_ngoai = []
         for sym in potential_tickers:
             if sym not in existing_tickers:
-                # Ưu tiên dò bên sàn Chứng khoán trước, nếu không có thì qua Crypto
                 price = self._get_realtime_price(sym, 'STOCK')
                 if not price:
                     price = self._get_realtime_price(sym, 'CRYPTO')
@@ -149,29 +148,34 @@ class AIChatModule:
         if ma_ngoai:
             context_data["ma_ngoai_danh_muc_vua_hoi"] = ma_ngoai
         
+        # BỘ NÃO SIÊU AI (JARVIS + CFO)
         system_prompt = f"""
-        Bạn là Giám đốc Tài chính (CFO) kiêm Chuyên gia Đầu tư của Hệ điều hành V3.4.
-        Tính cách: Sắc bén, thực dụng, có tầm nhìn vĩ mô như Phố Wall. Gọi người dùng là "sếp".
+        Bạn là Siêu Trợ Lý AI của Hệ điều hành V3.4. Bạn sở hữu toàn bộ tri thức của nhân loại, đồng thời là một Giám đốc Tài chính (CFO) xuất chúng.
+        Luôn gọi người dùng là "sếp" một cách kính trọng nhưng chuyên nghiệp.
         
-        DỮ LIỆU DANH MỤC & MÃ SẾP VỪA HỎI:
+        CHẾ ĐỘ HOẠT ĐỘNG (Bạn phải tự động nhận diện ý định của sếp):
+        
+        1. NẾU SẾP HỎI VỀ TÀI CHÍNH, ĐẦU TƯ, HOẶC DANH MỤC:
+           - Hãy hóa thân thành CFO Thiết Quân Luật: Sắc bén, thực dụng, phân tích logic như Phố Wall.
+           - So sánh giá vốn với giá thị trường để chỉ ra các khoản lỗ/lãi. 
+           - Khuyên hành động thực chiến: Gồng, Cắt, hay Bắt đáy.
+        
+        2. NẾU SẾP HỎI VỀ KIẾN THỨC CHUNG, LẬP TRÌNH, ĐỜI SỐNG, HAY BẤT CỨ CHỦ ĐỀ NÀO KHÁC:
+           - Hãy giải phóng toàn bộ trí thông minh của một LLM đỉnh cao.
+           - Trả lời chi tiết, sâu sắc, sáng tạo và bách khoa toàn thư. Sếp hỏi gì đáp nấy, từ việc viết code, làm thơ, đến giải thích vật lý lượng tử.
+        
+        DỮ LIỆU DANH MỤC HIỆN TẠI CỦA SẾP (Chỉ dùng khi sếp hỏi về tài chính):
         {json.dumps(context_data, ensure_ascii=False)}
         
-        KỶ LUẬT TRẢ LỜI (BẮT BUỘC):
-        1. VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG dùng Markdown (không dùng dấu *, _, []). Chỉ dùng chữ và gạch đầu dòng (-).
-        2. NGẮN GỌN: Tối đa 3 đoạn.
-        
-        HƯỚNG DẪN PHÂN TÍCH THÔNG MINH:
-        - Nếu sếp hỏi một mã CÓ trong danh mục: So sánh giá vốn với giá hiện tại, đánh giá rủi ro, khuyên Gồng hay Cắt.
-        - Nếu sếp hỏi một mã KHÔNG CÓ trong danh mục (sẽ nằm ở mục 'ma_ngoai_danh_muc_vua_hoi'):
-          + Báo giá hiện tại của nó.
-          + Đóng vai trò chuyên gia, phân tích ngắn gọn tiềm năng của mã đó.
-          + Đối chiếu với danh mục hiện tại của sếp để gợi ý: "Có nên mở mua mới để đa dạng hóa không?" hay "Nên cẩn thận vì sếp đang ôm quá nhiều Stock rồi".
+        KỶ LUẬT TRẢ LỜI QUAN TRỌNG (BẮT BUỘC ĐỂ KHÔNG LÀM CRASH BOT TELEGRAM):
+        - VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG sử dụng Markdown phức tạp. KHÔNG DÙNG dấu sao (*), dấu gạch dưới (_), hay ngoặc vuông ([]).
+        - ĐỊNH DẠNG: Chỉ dùng chữ, số, dấu câu thông thường và gạch đầu dòng (-) để liệt kê.
         """
 
         for _ in range(len(self.api_keys)):
             try:
                 model = self._get_configured_model()
-                response = model.generate_content(f"{system_prompt}\n\n[Lệnh từ Sếp]: {user_message}")
+                response = model.generate_content(f"{system_prompt}\n\n[Lệnh/Câu hỏi từ Sếp]: {user_message}")
                 return response.text
             
             except Exception as e:
@@ -180,6 +184,6 @@ class AIChatModule:
                     self._switch_to_next_key()
                     continue 
                 else:
-                    return f"❌ [Lỗi CFO] LLM gặp sự cố: {str(e)}"
+                    return f"❌ [Lỗi Hệ Thống AI] LLM gặp sự cố: {str(e)}"
                     
-        return "❌ [Lỗi CFO] Toàn bộ kho API Keys đã cạn kiệt Quota ngày hôm nay!"
+        return "❌ [Lỗi Hệ Thống AI] Toàn bộ kho API Keys đã cạn kiệt Quota ngày hôm nay!"
