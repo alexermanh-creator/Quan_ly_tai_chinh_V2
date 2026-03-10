@@ -48,27 +48,47 @@ class AIChatModule:
         self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
 
     def _get_realtime_price(self, symbol, wallet_type):
-        """Hàm tự động kết nối Internet lấy giá thị trường Real-time"""
+        """Hàm tự động kết nối Internet lấy giá thị trường Real-time (Đa luồng dự phòng)"""
         try:
             if wallet_type == 'CRYPTO':
                 # Gọi API Binance
-                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
+                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
                 if res.status_code == 200:
                     return float(res.json()['price'])
             
             elif wallet_type == 'STOCK':
-                # Gọi API Chứng khoán VN (TCBS)
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=3)
-                if res.status_code == 200:
-                    data = res.json()
-                    price = data.get('price', 0)
-                    # Xử lý giá nếu API trả về số nhỏ (TCBS thỉnh thoảng trả giá thực vd: 27000)
-                    return float(price)
+                # Fake Browser Header để vượt tường lửa
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json'
+                }
+                
+                # Cách 1: Thử gọi TCBS
+                try:
+                    res = requests.get(f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview", headers=headers, timeout=3)
+                    if res.status_code == 200:
+                        price = float(res.json().get('price', 0))
+                        if price > 0:
+                            return price
+                except:
+                    pass # Lỗi thì bỏ qua, chạy tiếp xuống Cách 2
+                
+                # Cách 2: Vòng qua API của VNDirect (Dự phòng siêu chắc)
+                try:
+                    res = requests.get(f"https://finfo-api.vndirect.com.vn/v4/stock_prices?sort=date:desc&q=code:{symbol}&size=1", headers=headers, timeout=3)
+                    if res.status_code == 200:
+                        data = res.json().get('data', [])
+                        if data:
+                            # VNDirect thường trả giá dạng 25.5 (thay vì 25500), nên ta phải x1000 cho khớp Database
+                            price = float(data[0]['close'])
+                            return price * 1000 if price < 1000 else price
+                except:
+                    pass
+                    
         except Exception as e:
-            print(f"[AI WARN] Không thể lấy giá realtime cho {symbol}: {e}")
+            print(f"[AI WARN] Rớt mạng khi lấy giá {symbol}: {e}")
             
-        return None # Trả về None nếu rớt mạng hoặc mã không tồn tại
+        return None # Nếu tất cả các cách đều sập thì mới chịu thua
 
     def get_portfolio_context(self):
         stats = self.report._process_data()
