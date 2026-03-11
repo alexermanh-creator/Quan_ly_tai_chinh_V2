@@ -13,7 +13,6 @@ from backend.modules.crypto import CryptoModule
 from backend.modules.data_manager import DataManagerModule
 from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
-# NHẬP PARSER MỚI VÀO ĐÂY
 from backend.core.parser import parse_currency, parse_trade_command, parse_dividend_command
 from backend.modules.ai_chat import AIChatModule
 from backend.modules.price_updater import PriceUpdaterModule
@@ -98,7 +97,7 @@ def handle_settings_callbacks(call):
         
     elif action == "set_target":
         user_context[chat_id] = 'WAIT_TARGET'
-        bot.edit_message_text("🎯 Sếp hãy gõ Mục tiêu NAV bằng VNĐ (VD: `500000000` cho 500 triệu):", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
+        bot.edit_message_text("🎯 Sếp hãy gõ Mục tiêu NAV (VD: `500tr`, `hòa vốn`, `lãi 10%`):", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
 
     elif action == "set_sync":
         user_context[chat_id] = 'WAIT_SYNC'
@@ -132,13 +131,12 @@ def handle_settings_callbacks(call):
     elif action == "confirm_reset_yes":
         bot.answer_callback_query(call.id, "⏳ Đang dọn dẹp sổ sách...")
         try:
-            try: db.execute_query("DELETE FROM history") 
-            except: pass
-            try: db.execute_query("DELETE FROM transactions")
-            except: pass
+            # FIX LỖI 100% DRAWDOWN: Xóa trắng hoàn toàn cả Vốn Nạp và Rút
+            db.execute_query("DELETE FROM transactions")
             db.execute_query("DELETE FROM holdings")
-            db.execute_query("UPDATE wallets SET balance = 0")
-            bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
+            db.execute_query("UPDATE wallets SET balance = 0, total_in = 0, total_out = 0")
+            
+            bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**\nToàn bộ Danh mục, Lịch sử và Vốn Nạp/Rút đã về 0!", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
             show_home(call.message)
         except Exception as e:
             bot.edit_message_text(f"❌ Lỗi Database khi xóa: {str(e)}", chat_id=chat_id, message_id=msg_id)
@@ -264,14 +262,13 @@ def handle_auto_update_price(message):
         bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
 
 # ==========================================
-# BỘ XỬ LÝ LỆNH GÕ TAY (ĐÃ GẮN PARSER CỔ TỨC)
+# BỘ XỬ LÝ LỆNH GÕ TAY
 # ==========================================
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ', 'ct ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
     try:
         if text.startswith('ct '):
-            # Nhường việc bóc tách chuỗi cho parser
             parsed = parse_dividend_command(text)
             if not parsed:
                 bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Hãy dùng: `ct tien [MÃ] [TIỀN]` hoặc `ct cp [MÃ] [SỐ LƯỢNG]`\nVí dụ: `ct tien VPB 500k`", parse_mode="Markdown")
@@ -371,7 +368,7 @@ def handle_fallback_and_ai_chat(message):
         return
 
     elif ctx == 'WAIT_TARGET':
-        # KHÔNG ép kiểu float nữa, lưu thẳng Text tự nhiên của sếp vào database!
+        # Lưu thẳng Text ngôn ngữ tự nhiên vào database
         settings_mod.update_setting('goal', text.strip())
         bot.reply_to(message, f"✅ Mục tiêu NAV đã lưu: {text.strip()}")
         show_settings(message)
@@ -433,4 +430,3 @@ if __name__ == "__main__":
     
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy...")
     bot.polling(none_stop=True)
-
