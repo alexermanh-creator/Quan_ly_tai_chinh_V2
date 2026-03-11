@@ -2,12 +2,21 @@
 import re
 
 def parse_currency(text_value):
-    """Hỗ trợ gõ 500k, 5m, 1b... thành số"""
-    text_value = str(text_value).lower().replace(',', '')
+    """Hỗ trợ gõ 500k, 5m, 1b, 100tr, 1 tỷ... thành số"""
+    text_value = str(text_value).lower().replace(',', '').strip()
+    
+    # Dịch các tiền tố thuần Việt sang chuẩn Quốc tế để tính toán
+    text_value = text_value.replace('triệu', 'm').replace('trieu', 'm').replace('tr', 'm')
+    text_value = text_value.replace('tỷ', 'b').replace('ty', 'b')
+    text_value = text_value.replace(' ', '') # Xóa khoảng trắng (vd: 100 m -> 100m)
+    
     if 'k' in text_value: return float(text_value.replace('k', '')) * 1000
     if 'm' in text_value: return float(text_value.replace('m', '')) * 1000000
     if 'b' in text_value: return float(text_value.replace('b', '')) * 1000000000
-    return float(text_value)
+    
+    # Lọc bỏ các ký tự chữ cái thừa (nếu có) để không bị crash
+    num_str = re.sub(r'[^\d\.\-]', '', text_value)
+    return float(num_str) if num_str else 0.0
 
 def parse_trade_command(text):
     """Phân tích lệnh mua bán s/c"""
@@ -42,7 +51,6 @@ def parse_dividend_command(text):
     symbol = parts[2].upper()
     
     try:
-        # Tái sử dụng parse_currency để sếp gõ "ct tien VPB 500k" vẫn nhận diện được
         value = parse_currency(" ".join(parts[3:]))
         return action_type, symbol, value
     except ValueError:
