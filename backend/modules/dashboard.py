@@ -21,13 +21,14 @@ class DashboardModule:
                     val = -val
                 target_nav = total_capital * (1 + val / 100)
         elif 'lai' in raw or 'lãi' in raw or '+' in raw:
-            clean_str = re.sub(r'[^\dkmbt\.]', '', raw.replace('lai', '').replace('lãi', '').replace('+', ''))
+            # Gọt sạch chữ "lãi", chỉ đẩy phần số ("100tr") sang cho parser xử lý
+            clean_str = raw.replace('lai', '').replace('lãi', '').replace('+', '').strip()
             try:
                 val = parse_currency(clean_str)
                 target_nav = total_capital + val
             except: pass
         elif 'am' in raw or 'âm' in raw or 'lo' in raw or 'lỗ' in raw or '-' in raw:
-            clean_str = re.sub(r'[^\dkmbt\.]', '', raw.replace('am', '').replace('âm', '').replace('lo', '').replace('lỗ', '').replace('-', ''))
+            clean_str = raw.replace('am', '').replace('âm', '').replace('lo', '').replace('lỗ', '').replace('-', '').strip()
             try:
                 val = parse_currency(clean_str)
                 target_nav = total_capital - val
@@ -45,11 +46,9 @@ class DashboardModule:
         wallets = {w['id']: w for w in data['wallets']}
         holdings = data['holdings']
         
-        # Lấy Tỷ giá Crypto từ Database
         crypto_rate = float(data.get('crypto_rate', 25000))
         
-        # 1. TÍNH TỔNG VỐN (CAPITAL) - FIX BUG TÍNH TRÙNG
-        # Chỉ lấy nạp rút từ Ví Mẹ (CASH) theo đúng chuẩn Plug & Play
+        # 1. TÍNH TỔNG VỐN (CAPITAL)
         total_in = wallets.get('CASH', {}).get('total_in', 0)
         total_out = wallets.get('CASH', {}).get('total_out', 0)
         total_capital = total_in - total_out
@@ -63,7 +62,6 @@ class DashboardModule:
         other_assets = 0
         
         for h in holdings:
-            # FIX BUG CRYPTO: Giá USD phải nhân với Tỷ giá quy đổi ra VNĐ
             if h['wallet_id'] == 'CRYPTO':
                 val = h['quantity'] * h['current_price'] * crypto_rate
                 crypto_assets += val
@@ -74,7 +72,6 @@ class DashboardModule:
                 
             total_assets += val
             
-        # Thêm tiền mặt dư thừa trong các ví con vào NAV của ví đó
         stock_assets += wallets.get('STOCK', {}).get('balance', 0)
         crypto_assets += wallets.get('CRYPTO', {}).get('balance', 0)
         other_assets += wallets.get('OTHER', {}).get('balance', 0)
@@ -96,7 +93,6 @@ class DashboardModule:
         else:
             gap_str = "Đã đạt target ✅"
 
-        # TÍNH PHÂN BỔ VỐN GỐC TỪNG VÍ (Nạp - Rút)
         stock_cap = wallets.get('STOCK', {}).get('total_in', 0) - wallets.get('STOCK', {}).get('total_out', 0)
         crypto_cap = wallets.get('CRYPTO', {}).get('total_in', 0) - wallets.get('CRYPTO', {}).get('total_out', 0)
         other_cap = wallets.get('OTHER', {}).get('total_in', 0) - wallets.get('OTHER', {}).get('total_out', 0)
@@ -115,7 +111,6 @@ class DashboardModule:
         msg += f"🥇 Khác: {other_cap/1000000:,.1f} triệu\n"
         msg += f"━━━━━━━━━━━━━━━━━━━\n"
 
-        # CHI TIẾT VÍ STOCK
         s_pl = stock_assets - stock_cap
         s_pct = (s_pl / stock_cap * 100) if stock_cap > 0 else 0
         s_icon = "🟢" if s_pl >= 0 else "🔴"
@@ -126,7 +121,6 @@ class DashboardModule:
         msg += f"📈 Lãi/Lỗ: {s_sign}{s_pl/1000000:,.1f} triệu ({s_icon} {s_sign}{s_pct:.1f}%)\n"
         msg += f"────────────\n"
 
-        # CHI TIẾT VÍ CRYPTO
         c_pl = crypto_assets - crypto_cap
         c_pct = (c_pl / crypto_cap * 100) if crypto_cap > 0 else 0
         c_icon = "🟢" if c_pl >= 0 else "🔴"
@@ -137,7 +131,6 @@ class DashboardModule:
         msg += f"📈 Lãi/Lỗ: {c_sign}{c_pl/1000000:,.1f} triệu ({c_icon} {c_sign}{c_pct:.1f}%)\n"
         msg += f"────────────\n"
 
-        # CHI TIẾT VÍ KHÁC
         o_pl = other_assets - other_cap
         o_pct = (o_pl / other_cap * 100) if other_cap > 0 else 0
         o_icon = "🟢" if o_pl >= 0 else "🔴"
