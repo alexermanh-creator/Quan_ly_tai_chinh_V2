@@ -8,7 +8,6 @@ class DashboardModule:
         self.db = DatabaseRepo()
 
     def _calculate_smart_goal(self, raw_goal_str, total_capital, current_nav):
-        """Hệ thống tư duy tính Target dựa trên ngôn ngữ tự nhiên"""
         raw = str(raw_goal_str).lower().strip()
         target_nav = total_capital
         
@@ -46,9 +45,13 @@ class DashboardModule:
         wallets = {w['id']: w for w in data['wallets']}
         holdings = data['holdings']
         
-        # 1. TÍNH TỔNG VỐN (CAPITAL)
-        total_in = sum(w['total_in'] for w in wallets.values())
-        total_out = sum(w['total_out'] for w in wallets.values())
+        # Lấy Tỷ giá Crypto từ Database
+        crypto_rate = float(data.get('crypto_rate', 25000))
+        
+        # 1. TÍNH TỔNG VỐN (CAPITAL) - FIX BUG TÍNH TRÙNG
+        # Chỉ lấy nạp rút từ Ví Mẹ (CASH) theo đúng chuẩn Plug & Play
+        total_in = wallets.get('CASH', {}).get('total_in', 0)
+        total_out = wallets.get('CASH', {}).get('total_out', 0)
         total_capital = total_in - total_out
         
         # 2. TÍNH TỔNG TÀI SẢN (NAV)
@@ -60,18 +63,23 @@ class DashboardModule:
         other_assets = 0
         
         for h in holdings:
-            val = h['quantity'] * h['current_price']
+            # FIX BUG CRYPTO: Giá USD phải nhân với Tỷ giá quy đổi ra VNĐ
+            if h['wallet_id'] == 'CRYPTO':
+                val = h['quantity'] * h['current_price'] * crypto_rate
+                crypto_assets += val
+            else:
+                val = h['quantity'] * h['current_price']
+                if h['wallet_id'] == 'STOCK': stock_assets += val
+                elif h['wallet_id'] == 'OTHER': other_assets += val
+                
             total_assets += val
-            if h['wallet_id'] == 'STOCK': stock_assets += val
-            elif h['wallet_id'] == 'CRYPTO': crypto_assets += val
-            elif h['wallet_id'] == 'OTHER': other_assets += val
             
         # Thêm tiền mặt dư thừa trong các ví con vào NAV của ví đó
         stock_assets += wallets.get('STOCK', {}).get('balance', 0)
         crypto_assets += wallets.get('CRYPTO', {}).get('balance', 0)
         other_assets += wallets.get('OTHER', {}).get('balance', 0)
 
-        # 3. TÍNH LÃI LỖ
+        # 3. TÍNH LÃI LỖ TỔNG
         total_pl = total_assets - total_capital
         pl_pct = (total_pl / total_capital * 100) if total_capital > 0 else 0
         pl_icon = "🟢" if total_pl >= 0 else "🔴"
