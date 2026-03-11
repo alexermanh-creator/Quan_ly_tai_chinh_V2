@@ -171,7 +171,6 @@ class DatabaseRepo:
                            
         return True, f"🗑️ **ĐÃ XÓA MÃ {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Hoàn trả lại Sức mua: **+ {cost_basis:,.0f} đ** vào ví {wallet_id}.\n(Dòng tiền đã được cân bằng lại an toàn)"
 
-    # --- TÍNH NĂNG MỚI: HOÀN TÁC GIAO DỊCH BÁN (UNDO) ---
     def undo_transaction(self, tx_id):
         tx = self.execute_query("SELECT * FROM transactions WHERE id = ?", (tx_id,), fetch_one=True)
         if not tx:
@@ -179,7 +178,7 @@ class DatabaseRepo:
             
         tx_type = tx['type']
         wallet_id = tx['wallet_id']
-        amount = tx['amount'] # Số tiền thu về lúc bán
+        amount = tx['amount']
         symbol = tx['symbol']
         
         if tx_type == 'BAN':
@@ -187,11 +186,9 @@ class DatabaseRepo:
             price = tx['price']
             realized_pl = tx['realized_pl'] or 0
             
-            # 1. Trừ lại tiền trong ví (thu hồi tiền đã cộng lúc bán)
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, wallet_id))
             
-            # 2. Khôi phục lại tài sản và vốn gốc
-            original_cost = amount - realized_pl # Toán học: Vốn gốc = Tiền thu về - Lãi
+            original_cost = amount - realized_pl
             holding = self.execute_query("SELECT * FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
             
             if holding:
@@ -203,12 +200,38 @@ class DatabaseRepo:
                 new_avg = original_cost / qty
                 self.execute_query("INSERT INTO holdings (wallet_id, symbol, quantity, average_price, current_price, cost_basis_vnd) VALUES (?, ?, ?, ?, ?, ?)", (wallet_id, symbol, qty, new_avg, price, original_cost))
                 
-            # 3. Xóa sổ giao dịch BÁN đó
             self.execute_query("DELETE FROM transactions WHERE id = ?", (tx_id,))
-            
             return True, f"⏪ **ĐÃ HOÀN TÁC LỆNH BÁN #{tx_id}**\n━━━━━━━━━━━━━━━━━━━\n✅ Phục hồi **{qty} {symbol}** vào danh mục.\n✅ Đã thu hồi **{amount:,.0f} đ** khỏi sức mua ví {wallet_id}."
             
         return False, "⚠️ Cỗ máy thời gian hiện tại chỉ hỗ trợ Hủy/Hoàn tác lệnh **BÁN (BAN)**."
+
+    # ==========================================
+    # MODULE: QUẢN LÝ CỔ TỨC
+    # ==========================================
+    def add_cash_dividend(self, symbol, amount):
+        """Xử lý Cổ tức bằng Tiền mặt"""
+        symbol = symbol.upper()
+        self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = 'STOCK'", (amount,))
+        self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, amount, realized_pl, note) VALUES ('STOCK', 'CO_TUC_TIEN', ?, ?, ?, ?)", 
+                           (symbol, amount, amount, f"Nhận cổ tức tiền mặt mã {symbol}"))
+        return True, f"💸 **CỔ TỨC TIỀN MẶT: {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Đã cộng **+ {amount:,.0f} đ** vào Sức mua Chứng khoán.\n📈 Khoản này đã được tính vào Tổng Lãi/Lỗ của Sếp!"
+
+    def add_stock_dividend(self, symbol, quantity):
+        """Xử lý Cổ tức bằng Cổ phiếu (Thưởng / Chia tách)"""
+        symbol = symbol.upper()
+        holding = self.execute_query("SELECT quantity, cost_basis_vnd FROM holdings WHERE wallet_id = 'STOCK' AND symbol = ?", (symbol,), fetch_one=True)
+        
+        if not holding:
+            return False, f"⚠️ Sếp đang không nắm giữ mã **{symbol}** trong danh mục Chứng khoán nên không thể nhận cổ tức cổ phiếu."
+
+        new_qty = holding['quantity'] + quantity
+        new_avg = holding['cost_basis_vnd'] / new_qty
+
+        self.execute_query("UPDATE holdings SET quantity = ?, average_price = ? WHERE wallet_id = 'STOCK' AND symbol = ?", (new_qty, new_avg, symbol))
+        self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, note) VALUES ('STOCK', 'CO_TUC_CP', ?, ?, 0, 0, ?)", 
+                           (symbol, quantity, f"Nhận cổ tức cổ phiếu mã {symbol}"))
+        
+        return True, f"🎁 **CỔ TỨC CỔ PHIẾU: {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Đã cộng thêm **+ {quantity:,.0f} cổ phiếu** vào danh mục.\n📉 Giá vốn trung bình (Cost Basis) đã được hệ thống tự động pha loãng và giảm xuống mức **{new_avg:,.0f} đ/cp**!"
 
     # ==========================================
     # XUẤT DATA CHO MODULE REPORT 
