@@ -36,7 +36,6 @@ db_keys = settings_mod.get_setting('gemini_keys')
 if db_keys:
     cfo_ai.api_keys = [k.strip() for k in db_keys.split(',') if k.strip()]
 
-# Biến lưu trạng thái ngữ cảnh của người dùng
 user_context = {}
 
 def get_history_keyboard():
@@ -104,7 +103,6 @@ def handle_settings_callbacks(call):
         user_context[chat_id] = 'WAIT_SYNC'
         bot.edit_message_text("⏱️ Sếp hãy gõ số phút cập nhật giá (VD: `15`, `30`, `60`. Gõ `0` để tắt):", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
 
-    # BẮT SỰ KIỆN NÚT HƯỚNG DẪN LỆNH
     elif action == "set_guide":
         text, markup = settings_mod.get_guide_text()
         bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
@@ -119,7 +117,6 @@ def handle_settings_callbacks(call):
         
     elif action == "ai_clear_keys":
         settings_mod.update_setting('gemini_keys', '')
-        # Reset về key trong file .env
         import os
         env_keys = os.environ.get("GEMINI_API_KEYS", "")
         cfo_ai.api_keys = [k.strip() for k in env_keys.split(",") if k.strip()]
@@ -138,19 +135,15 @@ def handle_settings_callbacks(call):
             except: pass
             try: db.execute_query("DELETE FROM transactions")
             except: pass
-            
             db.execute_query("DELETE FROM holdings")
-            # ĐÃ FIX: Chỉ reset balance, loại bỏ cột assets
             db.execute_query("UPDATE wallets SET balance = 0")
-            
-            bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**\nToàn bộ sổ sách đã được dọn sạch!", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
+            bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
             show_home(call.message)
-            
         except Exception as e:
             bot.edit_message_text(f"❌ Lỗi Database khi xóa: {str(e)}", chat_id=chat_id, message_id=msg_id)
 
 # ==========================================
-# CÁC MODULE KHÁC GIỮ NGUYÊN BÊN DƯỚI
+# CÁC MODULE KHÁC GIỮ NGUYÊN
 # ==========================================
 @bot.message_handler(func=lambda message: message.text == "📊 Báo cáo")
 def show_overall_report(message):
@@ -269,6 +262,9 @@ def handle_auto_update_price(message):
     except Exception as e:
         bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
 
+# ==========================================
+# BỘ XỬ LÝ LỆNH GÕ TAY (ĐÃ FIX: HỖ TRỢ DEL #ID)
+# ==========================================
 @bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
@@ -285,8 +281,17 @@ def handle_manual_commands(message):
                 bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
                 
         elif text.startswith('del '):
-            sym = text.split()[1].upper()
-            _, msg_text = db.delete_holding_and_refund(sym)
+            param = text.split()[1].upper()
+            if param.startswith('#'):
+                # XỬ LÝ LỆNH: del #154 (Hủy giao dịch)
+                try:
+                    tx_id = int(param.replace('#', ''))
+                    success, msg_text = db.undo_transaction(tx_id)
+                except ValueError:
+                    msg_text = "⚠️ ID giao dịch không hợp lệ. Hãy gõ ví dụ: `del #154`"
+            else:
+                # XỬ LÝ LỆNH: del USDT (Xóa hẳn mã và hoàn tiền)
+                _, msg_text = db.delete_holding_and_refund(param)
             bot.reply_to(message, msg_text, parse_mode="Markdown")
 
         elif text.startswith('rate crypto '):
