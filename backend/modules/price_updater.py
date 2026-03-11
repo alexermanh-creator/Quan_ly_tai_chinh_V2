@@ -4,10 +4,12 @@ import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from backend.database.repository import DatabaseRepo
+from backend.modules.report import ReportModule
 
 class PriceUpdaterModule:
     def __init__(self, interval_minutes=30):
         self.db = DatabaseRepo()
+        self.report = ReportModule()
         self.interval_seconds = interval_minutes * 60
         self.is_running = False
 
@@ -79,15 +81,16 @@ class PriceUpdaterModule:
     def sync_all_prices(self):
         print(f"[{time.strftime('%H:%M:%S')}] 🔄 Bắt đầu tiến trình đồng bộ giá thị trường...")
         try:
-            # FIX LỖI DANH MỤC TRỐNG: Lấy toàn bộ mã trong sổ, không quan tâm quantity
-            rows = self.db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings", fetch_one=False)
+            # SỬ DỤNG TRỰC TIẾP DỮ LIỆU TỪ REPORT MODULE
+            stats = self.report._process_data()
+            holdings = stats['raw_data']['holdings']
             
-            if not rows or len(rows) == 0:
+            if not holdings or len(holdings) == 0:
                 print("[SYNC INFO] Danh mục trống, không cần đồng bộ.")
                 return
 
             with ThreadPoolExecutor(max_workers=5) as executor:
-                results = list(executor.map(self._sync_single_symbol, rows))
+                results = list(executor.map(self._sync_single_symbol, holdings))
             
             for res in results:
                 print(f"[SYNC RESULT] {res}")
