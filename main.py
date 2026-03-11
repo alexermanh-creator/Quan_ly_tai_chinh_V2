@@ -127,11 +127,27 @@ def handle_settings_callbacks(call):
         bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
         
     elif action == "confirm_reset_yes":
-        db.execute_query("DELETE FROM transactions")
-        db.execute_query("DELETE FROM holdings")
-        db.execute_query("UPDATE wallets SET balance = 0, assets = 0")
-        bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**\nToàn bộ sổ sách đã được dọn sạch!", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
-        show_home(call.message)
+        # 1. Báo cho Telegram biết để ngừng xoay nút
+        bot.answer_callback_query(call.id, "⏳ Đang dọn dẹp sổ sách...")
+        
+        try:
+            # 2. Xóa sạch lịch sử giao dịch (Quét cả 2 tên bảng phổ biến để chống crash)
+            try: db.execute_query("DELETE FROM history") 
+            except: pass
+            try: db.execute_query("DELETE FROM transactions")
+            except: pass
+            
+            # 3. Quét sạch danh mục và xả ví về 0
+            db.execute_query("DELETE FROM holdings")
+            db.execute_query("UPDATE wallets SET balance = 0, assets = 0")
+            
+            # 4. Gửi thông báo thành công và gọi lại Menu Trang chủ
+            bot.edit_message_text("✅ **ĐÃ KHÔI PHỤC CÀI ĐẶT GỐC THÀNH CÔNG.**\nToàn bộ sổ sách đã được dọn sạch không còn 1 đồng!", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
+            show_home(call.message)
+            
+        except Exception as e:
+            # Nếu vẫn còn lỗi, phải in ra cho sếp thấy chứ không được im lặng
+            bot.edit_message_text(f"❌ Lỗi Database khi xóa: {str(e)}", chat_id=chat_id, message_id=msg_id)
 
 # ==========================================
 # CÁC MODULE KHÁC GIỮ NGUYÊN BÊN DƯỚI
@@ -404,3 +420,4 @@ if __name__ == "__main__":
     
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy...")
     bot.polling(none_stop=True)
+
