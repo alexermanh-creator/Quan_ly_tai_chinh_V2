@@ -1,91 +1,142 @@
 # backend/modules/dashboard.py
+import re
 from backend.database.repository import DatabaseRepo
-from backend.utils.formatter import format_currency, format_percent, draw_line
+from backend.core.parser import parse_currency
 
 class DashboardModule:
     def __init__(self):
         self.db = DatabaseRepo()
 
+    def _calculate_smart_goal(self, raw_goal_str, total_capital, current_nav):
+        """Hệ thống tư duy tính Target dựa trên ngôn ngữ tự nhiên"""
+        raw = str(raw_goal_str).lower().strip()
+        target_nav = total_capital
+        
+        if raw in ['0', 'hoa von', 'hòa vốn']:
+            target_nav = total_capital
+        elif '%' in raw:
+            match = re.search(r'(\d+(\.\d+)?)', raw)
+            if match:
+                val = float(match.group(1))
+                if 'am' in raw or 'âm' in raw or 'lo' in raw or 'lỗ' in raw or '-' in raw:
+                    val = -val
+                target_nav = total_capital * (1 + val / 100)
+        elif 'lai' in raw or 'lãi' in raw or '+' in raw:
+            clean_str = re.sub(r'[^\dkmbt\.]', '', raw.replace('lai', '').replace('lãi', '').replace('+', ''))
+            try:
+                val = parse_currency(clean_str)
+                target_nav = total_capital + val
+            except: pass
+        elif 'am' in raw or 'âm' in raw or 'lo' in raw or 'lỗ' in raw or '-' in raw:
+            clean_str = re.sub(r'[^\dkmbt\.]', '', raw.replace('am', '').replace('âm', '').replace('lo', '').replace('lỗ', '').replace('-', ''))
+            try:
+                val = parse_currency(clean_str)
+                target_nav = total_capital - val
+            except: pass
+        else:
+            try:
+                target_nav = parse_currency(raw)
+            except: pass
+
+        gap_to_target = target_nav - current_nav
+        return target_nav, gap_to_target
+
     def get_main_dashboard(self):
-        try:
-            data = self.db.get_dashboard_data()
-            wallets = {w['id']: w for w in data['wallets']}
-            holdings = data['holdings']
-            realized_pl = data['realized']
+        data = self.db.get_dashboard_data()
+        wallets = {w['id']: w for w in data['wallets']}
+        holdings = data['holdings']
+        
+        # 1. TÍNH TỔNG VỐN (CAPITAL)
+        total_in = sum(w['total_in'] for w in wallets.values())
+        total_out = sum(w['total_out'] for w in wallets.values())
+        total_capital = total_in - total_out
+        
+        # 2. TÍNH TỔNG TÀI SẢN (NAV)
+        cash_balance = wallets.get('CASH', {}).get('balance', 0)
+        total_assets = cash_balance
+        
+        stock_assets = 0
+        crypto_assets = 0
+        other_assets = 0
+        
+        for h in holdings:
+            val = h['quantity'] * h['current_price']
+            total_assets += val
+            if h['wallet_id'] == 'STOCK': stock_assets += val
+            elif h['wallet_id'] == 'CRYPTO': crypto_assets += val
+            elif h['wallet_id'] == 'OTHER': other_assets += val
             
-            rate_row = self.db.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)
-            crypto_rate = float(rate_row['value']) if rate_row else 25000.0
-            
-            # --- 1. LOGIC TÍNH TOÁN TỔNG ---
-            total_in = wallets.get('CASH', {}).get('total_in', 0)
-            total_out = wallets.get('CASH', {}).get('total_out', 0)
-            net_invested = total_in - total_out
-            cash_balance = wallets.get('CASH', {}).get('balance', 0)
+        # Thêm tiền mặt dư thừa trong các ví con vào NAV của ví đó
+        stock_assets += wallets.get('STOCK', {}).get('balance', 0)
+        crypto_assets += wallets.get('CRYPTO', {}).get('balance', 0)
+        other_assets += wallets.get('OTHER', {}).get('balance', 0)
 
-            w_assets, w_pl, w_book_value = {}, {}, {}
-            for wid in ['STOCK', 'CRYPTO', 'OTHER']:
-                w = wallets.get(wid, {'balance':0, 'total_in':0, 'total_out':0})
-                h_list = [h for h in holdings if h['wallet_id'] == wid]
-                
-                gt_thi_truong, cost_vnd = 0, 0
-                for h in h_list:
-                    p_now = h['current_price'] or h['average_price']
-                    mult = crypto_rate if wid == 'CRYPTO' else 1
-                    gt_thi_truong += (h['quantity'] * p_now * mult)
-                    cost_vnd += h.get('cost_basis_vnd', 0)
+        # 3. TÍNH LÃI LỖ
+        total_pl = total_assets - total_capital
+        pl_pct = (total_pl / total_capital * 100) if total_capital > 0 else 0
+        pl_icon = "🟢" if total_pl >= 0 else "🔴"
+        sign = "+" if total_pl > 0 else ""
 
-                w_assets[wid] = w['balance'] + gt_thi_truong
-                w_pl[wid] = realized_pl.get(wid, 0) + (gt_thi_truong - cost_vnd)
-                w_book_value[wid] = w['total_in'] - w['total_out']
+        # 4. TÍNH MỤC TIÊU (SMART GOAL)
+        raw_goal = data.get('goal', '0')
+        target_nav, gap = self._calculate_smart_goal(raw_goal, total_capital, total_assets)
+        
+        if gap > 0:
+            gap_str = f"Cần thêm {gap/1000000:,.1f} triệu"
+        elif gap < 0:
+            gap_str = f"Vượt target {-gap/1000000:,.1f} triệu 🎉"
+        else:
+            gap_str = "Đã đạt target ✅"
 
-            total_assets = cash_balance + sum(w_assets.values())
-            total_pl = sum(w_pl.values())
-            pl_pct = (total_pl / net_invested * 100) if net_invested > 0 else 0
+        # TÍNH PHÂN BỔ VỐN GỐC TỪNG VÍ (Nạp - Rút)
+        stock_cap = wallets.get('STOCK', {}).get('total_in', 0) - wallets.get('STOCK', {}).get('total_out', 0)
+        crypto_cap = wallets.get('CRYPTO', {}).get('total_in', 0) - wallets.get('CRYPTO', {}).get('total_out', 0)
+        other_cap = wallets.get('OTHER', {}).get('total_in', 0) - wallets.get('OTHER', {}).get('total_out', 0)
 
-            # --- 2. XỬ LÝ MỤC TIÊU (GOAL) ---
-            goal_str = data.get('goal', 'lai 10%')
-            goal_target = 0
-            if goal_str.startswith('lai '):
-                val = goal_str.replace('lai ', '').strip()
-                if '%' in val:
-                    goal_target = net_invested * float(val.replace('%','')) / 100
-                else:
-                    mult = 1_000_000_000 if 'ty' in val else (1_000_000 if 'tr' in val else 1)
-                    num_str = val.replace('ty','').replace('trieu','').replace('tr','').strip()
-                    try: goal_target = float(num_str) * mult
-                    except: pass
-            
-            goal_pct = (total_pl / goal_target * 100) if goal_target > 0 else 0
+        msg = f"🏦 **HỆ ĐIỀU HÀNH TÀI CHÍNH V3.4**\n━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"💰 Tổng tài sản: {total_assets/1000000:,.1f} triệu\n"
+        msg += f"📤 Tổng nạp: {total_in/1000000:,.1f} triệu\n"
+        msg += f"📥 Tổng rút: {total_out/1000000:,.1f} triệu\n"
+        msg += f"💵 Cash còn lại: {cash_balance:,.0f} đ\n"
+        msg += f"📈 Lãi/Lỗ tổng: {sign}{total_pl/1000000:,.1f} triệu ({pl_icon} {sign}{pl_pct:.1f}%)\n"
+        msg += f"🎯 Mục tiêu: {raw_goal} (Đích: {target_nav/1000000:,.1f}tr | {gap_str})\n"
+        msg += f"────────────\n"
+        msg += f"📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):\n"
+        msg += f"📈 Stock: {stock_cap/1000000:,.1f} triệu\n"
+        msg += f"🟡 Crypto: {crypto_cap/1000000:,.1f} triệu\n"
+        msg += f"🥇 Khác: {other_cap/1000000:,.1f} triệu\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━\n"
 
-            # --- 3. DỰNG LAYOUT ---
-            lines = [
-                "🏦 HỆ ĐIỀU HÀNH TÀI CHÍNH V3.4", draw_line("thick"),
-                f"💰 Tổng tài sản: {format_currency(total_assets)}",
-                f"📤 Tổng nạp: {format_currency(total_in)}",
-                f"📥 Tổng rút: {format_currency(total_out)}",
-                f"💵 Cash còn lại: {format_currency(cash_balance)}",
-                f"📈 Lãi/Lỗ tổng: {format_currency(total_pl)} ({format_percent(pl_pct)})",
-                f"🎯 Mục tiêu: {goal_str} ({goal_pct:.1f}% - {format_currency(total_pl)}/{format_currency(goal_target)})",
-                draw_line("thin"),
-                "📦 PHÂN BỔ VỐN GỐC (BOOK VALUE):",
-                f"📈 Stock: {format_currency(w_book_value['STOCK'])}",
-                f"🟡 Crypto: {format_currency(w_book_value['CRYPTO'])}",
-                f"🥇 Khác: {format_currency(w_book_value['OTHER'])}",
-                draw_line("thick")
-            ]
+        # CHI TIẾT VÍ STOCK
+        s_pl = stock_assets - stock_cap
+        s_pct = (s_pl / stock_cap * 100) if stock_cap > 0 else 0
+        s_icon = "🟢" if s_pl >= 0 else "🔴"
+        s_sign = "+" if s_pl > 0 else ""
+        msg += f"📈 **STOCK**\n"
+        msg += f"💰 Tài sản: {stock_assets/1000000:,.1f} triệu\n"
+        msg += f"📤 Nạp: {wallets.get('STOCK', {}).get('total_in', 0)/1000000:,.1f} triệu | 📥 Rút: {wallets.get('STOCK', {}).get('total_out', 0)/1000000:,.1f} triệu\n"
+        msg += f"📈 Lãi/Lỗ: {s_sign}{s_pl/1000000:,.1f} triệu ({s_icon} {s_sign}{s_pct:.1f}%)\n"
+        msg += f"────────────\n"
 
-            # Chi tiết từng ví
-            icons = {'STOCK': '📈', 'CRYPTO': '🟡', 'OTHER': '🥇'}
-            for wid in ['STOCK', 'CRYPTO', 'OTHER']:
-                von_ví = w_book_value[wid]
-                roi = (w_pl[wid] / von_ví * 100) if von_ví > 0 else 0
-                lines += [
-                    f"{icons[wid]} {wid if wid != 'OTHER' else 'TÀI SẢN KHÁC'}",
-                    f"💰 Tài sản: {format_currency(w_assets[wid])}",
-                    f"📤 Nạp: {format_currency(wallets.get(wid,{}).get('total_in',0))} | 📥 Rút: {format_currency(wallets.get(wid,{}).get('total_out',0))}",
-                    f"📈 Lãi/Lỗ: {format_currency(w_pl[wid])} ({format_percent(roi)})",
-                    draw_line("thin")
-                ]
-            
-            return "\n".join(lines)
-        except Exception as e: return f"❌ Lỗi Dashboard: {str(e)}"
+        # CHI TIẾT VÍ CRYPTO
+        c_pl = crypto_assets - crypto_cap
+        c_pct = (c_pl / crypto_cap * 100) if crypto_cap > 0 else 0
+        c_icon = "🟢" if c_pl >= 0 else "🔴"
+        c_sign = "+" if c_pl > 0 else ""
+        msg += f"🟡 **CRYPTO**\n"
+        msg += f"💰 Tài sản: {crypto_assets/1000000:,.1f} triệu\n"
+        msg += f"📤 Nạp: {wallets.get('CRYPTO', {}).get('total_in', 0)/1000000:,.1f} triệu | 📥 Rút: {wallets.get('CRYPTO', {}).get('total_out', 0)/1000000:,.1f} triệu\n"
+        msg += f"📈 Lãi/Lỗ: {c_sign}{c_pl/1000000:,.1f} triệu ({c_icon} {c_sign}{c_pct:.1f}%)\n"
+        msg += f"────────────\n"
+
+        # CHI TIẾT VÍ KHÁC
+        o_pl = other_assets - other_cap
+        o_pct = (o_pl / other_cap * 100) if other_cap > 0 else 0
+        o_icon = "🟢" if o_pl >= 0 else "🔴"
+        o_sign = "+" if o_pl > 0 else ""
+        msg += f"🥇 **TÀI SẢN KHÁC**\n"
+        msg += f"💰 Tài sản: {other_assets/1000000:,.1f} triệu\n"
+        msg += f"📤 Nạp: {wallets.get('OTHER', {}).get('total_in', 0)/1000000:,.1f} triệu | 📥 Rút: {wallets.get('OTHER', {}).get('total_out', 0)/1000000:,.1f} triệu\n"
+        msg += f"📈 Lãi/Lỗ: {o_sign}{o_pl/1000000:,.1f} triệu ({o_icon} {o_sign}{o_pct:.1f}%)\n"
+
+        return msg
