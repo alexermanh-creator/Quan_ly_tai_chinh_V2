@@ -21,9 +21,12 @@ class PriceUpdaterModule:
             symbol = symbol.upper().strip()
 
             if wallet_type == 'CRYPTO':
-                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
-                if res.status_code == 200:
-                    return float(res.json()['price'])
+                try:
+                    res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
+                    if res.status_code == 200:
+                        return float(res.json()['price'])
+                except Exception:
+                    pass
             
             elif wallet_type == 'STOCK':
                 # Yahoo Finance
@@ -59,7 +62,7 @@ class PriceUpdaterModule:
                     pass
 
         except Exception as e:
-            print(f"[SYNC WARN] Không thể lấy giá cho {symbol}: {e}")
+            print(f"[SYNC WARN] Lỗi hệ thống khi quét giá {symbol}: {e}")
             
         return None
 
@@ -69,21 +72,20 @@ class PriceUpdaterModule:
         price = self._get_realtime_price(sym, w_type)
         
         if price:
-            # Ghi thẳng vào Database
             self.db.update_market_price(sym, price)
             return f"✅ {sym}: {price:,.0f} đ"
-        return f"❌ {sym}: Lỗi kết nối"
+        return f"❌ {sym}: Lỗi kết nối / Mã không tồn tại"
 
     def sync_all_prices(self):
         print(f"[{time.strftime('%H:%M:%S')}] 🔄 Bắt đầu tiến trình đồng bộ giá thị trường...")
         try:
-            # Lấy danh sách các mã đang nắm giữ (quantity != 0)
-            rows = self.db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings WHERE quantity != 0", fetch_one=False)
-            if not rows:
+            # FIX LỖI DANH MỤC TRỐNG: Lấy toàn bộ mã trong sổ, không quan tâm quantity
+            rows = self.db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings", fetch_one=False)
+            
+            if not rows or len(rows) == 0:
                 print("[SYNC INFO] Danh mục trống, không cần đồng bộ.")
                 return
 
-            # Chạy đa luồng để cập nhật nhanh như chớp
             with ThreadPoolExecutor(max_workers=5) as executor:
                 results = list(executor.map(self._sync_single_symbol, rows))
             
@@ -98,14 +100,12 @@ class PriceUpdaterModule:
         """Hàm chạy ngầm vô tận"""
         while self.is_running:
             self.sync_all_prices()
-            # Ngủ 1 khoảng thời gian rồi chạy lại
             time.sleep(self.interval_seconds)
 
     def start_background_sync(self):
         """Kích hoạt tiến trình chạy ngầm"""
         if not self.is_running:
             self.is_running = True
-            # daemon=True giúp thread tự chết khi sếp tắt Bot Telegram
             thread = threading.Thread(target=self._worker, daemon=True)
             thread.start()
             print(f"🚀 [HỆ THỐNG] Đã khởi động Module Auto-Sync Giá (Mỗi {self.interval_seconds // 60} phút/lần).")
