@@ -38,13 +38,23 @@ class DatabaseRepo:
             return [dict(row) for row in cursor.fetchall()] if fetch_all else cursor.lastrowid
 
     def update_cash_balance(self, amount, tx_type):
-        if amount > 0:
-            self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
-        else:
+        if amount < 0: # Rút tiền: KIỂM TRA SỨC MUA VÍ MẸ
+            wallet = self.execute_query("SELECT balance FROM wallets WHERE id = 'CASH'", fetch_one=True)
+            current_balance = wallet['balance'] if wallet else 0
+            if current_balance < abs(amount):
+                raise ValueError(f"Ví CASH không đủ tiền để rút! (Sức mua hiện tại: {current_balance:,.0f} đ)")
             self.execute_query("UPDATE wallets SET balance = balance + ?, total_out = total_out + ? WHERE id = 'CASH'", (amount, abs(amount)))
+        else: # Nạp tiền
+            self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = 'CASH'", (amount, amount))
         self.execute_query("INSERT INTO transactions (wallet_id, type, amount) VALUES ('CASH', ?, ?)", (tx_type, amount))
 
     def transfer_funds(self, from_wallet, to_wallet, amount):
+        # KIỂM TRA SỨC MUA VÍ NGUỒN TRƯỚC KHI CHUYỂN
+        wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (from_wallet,), fetch_one=True)
+        current_balance = wallet['balance'] if wallet else 0
+        if current_balance < amount:
+            raise ValueError(f"Ví {from_wallet} không đủ tiền để chuyển! (Sức mua hiện tại: {current_balance:,.0f} đ)")
+
         self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (amount, from_wallet))
         self.execute_query("UPDATE wallets SET balance = balance + ?, total_in = total_in + ? WHERE id = ?", (amount, amount, to_wallet))
         if from_wallet != 'CASH':
@@ -53,6 +63,14 @@ class DatabaseRepo:
 
     def execute_trade(self, wallet_id, symbol, quantity, price, total_value_vnd):
         symbol = symbol.upper()
+        
+        # KIỂM TRA SỨC MUA KHI MUA (Bức tường lửa)
+        if quantity > 0:
+            wallet = self.execute_query("SELECT balance FROM wallets WHERE id = ?", (wallet_id,), fetch_one=True)
+            current_balance = wallet['balance'] if wallet else 0
+            if current_balance < total_value_vnd:
+                raise ValueError(f"Sức mua ví {wallet_id} không đủ! (Đang có: {current_balance:,.0f} đ, Cần: {total_value_vnd:,.0f} đ).\n💡 Sếp hãy dùng lệnh 'chuyen {wallet_id.lower()} [Số tiền]' để bơm thêm máu từ Ví Mẹ CASH sang.")
+
         holding = self.execute_query("SELECT quantity, average_price, cost_basis_vnd FROM holdings WHERE wallet_id = ? AND symbol = ?", (wallet_id, symbol), fetch_one=True)
         if quantity > 0:
             self.execute_query("UPDATE wallets SET balance = balance - ? WHERE id = ?", (total_value_vnd, wallet_id))
@@ -66,6 +84,10 @@ class DatabaseRepo:
             self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, realized_pl) VALUES (?, 'MUA', ?, ?, ?, ?, 0)", (wallet_id, symbol, quantity, price, -total_value_vnd))
         else:
             abs_qty = abs(quantity)
+            # KIỂM TRA SỐ LƯỢNG KHI BÁN (Chống bán khống)
+            if not holding or holding['quantity'] < abs_qty:
+                raise ValueError(f"Không thể bán {abs_qty} {symbol}! Sếp chỉ đang có {holding['quantity'] if holding else 0} cổ phiếu.")
+
             self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = ?", (total_value_vnd, wallet_id))
             cost_per_unit = holding['cost_basis_vnd'] / holding['quantity']
             real_pl = total_value_vnd - (abs_qty * cost_per_unit)
