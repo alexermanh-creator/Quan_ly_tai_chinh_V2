@@ -16,7 +16,7 @@ class DatabaseRepo:
             cursor = conn.cursor()
             cursor.execute("INSERT OR IGNORE INTO wallets (id) VALUES ('CASH'), ('STOCK'), ('CRYPTO'), ('OTHER')")
             cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-            cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', 'lai 10%'), ('crypto_rate', '25000')")
+            cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('goal', '0'), ('crypto_rate', '25000')")
             
             try: cursor.execute("ALTER TABLE holdings ADD COLUMN current_price REAL DEFAULT 0")
             except: pass
@@ -99,7 +99,8 @@ class DatabaseRepo:
             "holdings": self.execute_query("SELECT * FROM holdings", fetch_all=True),
             "realized": {r['wallet_id']: (r['total'] or 0) for r in self.execute_query("SELECT wallet_id, SUM(realized_pl) as total FROM transactions GROUP BY wallet_id", fetch_all=True)},
             "perf_symbols": self.execute_query("SELECT wallet_id, symbol, SUM(realized_pl) as realized, SUM(CASE WHEN type='MUA' THEN ABS(amount) ELSE 0 END) as total_invested FROM transactions WHERE symbol IS NOT NULL GROUP BY wallet_id, symbol", fetch_all=True),
-            "goal": self.execute_query("SELECT value FROM settings WHERE key = 'goal'", fetch_one=True)['value']
+            "goal": self.execute_query("SELECT value FROM settings WHERE key = 'goal'", fetch_one=True)['value'],
+            "crypto_rate": self.execute_query("SELECT value FROM settings WHERE key = 'crypto_rate'", fetch_one=True)['value']
         }
 
     # ==========================================
@@ -125,7 +126,7 @@ class DatabaseRepo:
         self.execute_query(query, (wallet_id, tx_type, amount, f"[{date_str}] {note}"))
 
     # ==========================================
-    # MODULE LỊCH SỬ & HOÀN TIỀN / HOÀN TÁC
+    # LỊCH SỬ & HOÀN TIỀN / CỔ TỨC
     # ==========================================
     def get_transactions_paginated(self, limit=5, offset=0, filter_type='ALL', symbol=None):
         query = "SELECT * FROM transactions WHERE 1=1"
@@ -205,11 +206,7 @@ class DatabaseRepo:
             
         return False, "⚠️ Cỗ máy thời gian hiện tại chỉ hỗ trợ Hủy/Hoàn tác lệnh **BÁN (BAN)**."
 
-    # ==========================================
-    # MODULE: QUẢN LÝ CỔ TỨC
-    # ==========================================
     def add_cash_dividend(self, symbol, amount):
-        """Xử lý Cổ tức bằng Tiền mặt"""
         symbol = symbol.upper()
         self.execute_query("UPDATE wallets SET balance = balance + ? WHERE id = 'STOCK'", (amount,))
         self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, amount, realized_pl, note) VALUES ('STOCK', 'CO_TUC_TIEN', ?, ?, ?, ?)", 
@@ -217,25 +214,17 @@ class DatabaseRepo:
         return True, f"💸 **CỔ TỨC TIỀN MẶT: {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Đã cộng **+ {amount:,.0f} đ** vào Sức mua Chứng khoán.\n📈 Khoản này đã được tính vào Tổng Lãi/Lỗ của Sếp!"
 
     def add_stock_dividend(self, symbol, quantity):
-        """Xử lý Cổ tức bằng Cổ phiếu (Thưởng / Chia tách)"""
         symbol = symbol.upper()
         holding = self.execute_query("SELECT quantity, cost_basis_vnd FROM holdings WHERE wallet_id = 'STOCK' AND symbol = ?", (symbol,), fetch_one=True)
-        
         if not holding:
             return False, f"⚠️ Sếp đang không nắm giữ mã **{symbol}** trong danh mục Chứng khoán nên không thể nhận cổ tức cổ phiếu."
-
         new_qty = holding['quantity'] + quantity
         new_avg = holding['cost_basis_vnd'] / new_qty
-
         self.execute_query("UPDATE holdings SET quantity = ?, average_price = ? WHERE wallet_id = 'STOCK' AND symbol = ?", (new_qty, new_avg, symbol))
         self.execute_query("INSERT INTO transactions (wallet_id, type, symbol, quantity, price, amount, note) VALUES ('STOCK', 'CO_TUC_CP', ?, ?, 0, 0, ?)", 
                            (symbol, quantity, f"Nhận cổ tức cổ phiếu mã {symbol}"))
-        
-        return True, f"🎁 **CỔ TỨC CỔ PHIẾU: {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Đã cộng thêm **+ {quantity:,.0f} cổ phiếu** vào danh mục.\n📉 Giá vốn trung bình (Cost Basis) đã được hệ thống tự động pha loãng và giảm xuống mức **{new_avg:,.0f} đ/cp**!"
+        return True, f"🎁 **CỔ TỨC CỔ PHIẾU: {symbol}**\n━━━━━━━━━━━━━━━━━━━\n✅ Đã cộng thêm **+ {quantity:,.0f} cổ phiếu** vào danh mục.\n📉 Giá vốn trung bình đã giảm xuống mức **{new_avg:,.0f} đ/cp**!"
 
-    # ==========================================
-    # XUẤT DATA CHO MODULE REPORT 
-    # ==========================================
     def get_report_raw_data(self):
         return {
             "wallets": self.execute_query("SELECT * FROM wallets", fetch_all=True),
