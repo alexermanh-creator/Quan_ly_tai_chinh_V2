@@ -10,7 +10,7 @@ class SettingsModule:
     def _init_default_settings(self):
         defaults = {
             'crypto_rate': '25000',
-            'target_nav': '200000000',
+            'goal': '0', # Sửa lại key thành 'goal' cho đồng nhất toàn hệ thống
             'gemini_keys': '',
             'auto_sync_interval': '30'
         }
@@ -28,7 +28,7 @@ class SettingsModule:
 
     def get_main_menu(self):
         rate = float(self.get_setting('crypto_rate') or 25000)
-        target = float(self.get_setting('target_nav') or 0)
+        target = self.get_setting('goal') or '0'
         sync_int = self.get_setting('auto_sync_interval')
         keys_str = self.get_setting('gemini_keys')
         keys_count = len([k for k in keys_str.split(',') if k.strip()]) if keys_str else "Dùng file .env"
@@ -38,7 +38,7 @@ class SettingsModule:
             "━━━━━━━━━━━━━━━━━━━\n"
             f"💱 **Tỷ giá Crypto:** 1 USD = {rate:,.0f} đ\n"
             f"⏱️ **Tự động quét giá:** {sync_int} phút/lần\n"
-            f"🎯 **Mục tiêu NAV:** {target:,.0f} đ\n"
+            f"🎯 **Mục tiêu NAV:** {target}\n"
             f"🤖 **AI API Keys:** {keys_count}\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             "👇 *Vui lòng chọn thông số Sếp muốn thay đổi:*"
@@ -70,17 +70,17 @@ class SettingsModule:
             "📈 **2. CHỨNG KHOÁN (STOCK)**\n"
             "• Mua: `s [Mã] [SL] [Giá]` (VD: `s VPB 1000 25.5`)\n"
             "• Bán: `s [Mã] -[SL] [Giá]` (Thêm dấu `-` trước SL)\n"
-            "• Cổ tức Tiền: `ct tien [Mã] [Số tiền]` (VD: `ct tien VPB 500k`)\n"
-            "• Cổ tức Cổ phiếu: `ct cp [Mã] [SL]` (VD: `ct cp VPB 150`)\n\n"
+            "• Cổ tức Tiền: `ct tien [Mã] [Số tiền]`\n"
+            "• Cổ tức Cổ phiếu: `ct cp [Mã] [SL]`\n\n"
             "🟡 **3. CRYPTO (COIN)**\n"
-            "• Mua: `c [Mã] [SL] [Giá USD]` (VD: `c ETH 0.5 2000`)\n"
+            "• Mua: `c [Mã] [SL] [Giá USD]`\n"
             "• Bán: `c [Mã] -[SL] [Giá USD]`\n\n"
             "🛠 **4. TIỆN ÍCH KHÁC**\n"
-            "• `up [Mã] [Giá]` : Sửa giá tay (VD: `up VPB 26`)\n"
-            "• `del [Mã]` : Xóa mã (VD: `del VPB`)\n"
-            "• `del #[ID]` : Hoàn tác lệnh Bán (VD: `del #154`)\n"
-            "• `his [Mã/Ví]` : Lịch sử (VD: `his VPB` hoặc `his nap`)\n"
-            "• `? [Câu hỏi]` : Hỏi AI CFO (VD: `? Phân tích danh mục`)\n"
+            "• `up [Mã] [Giá]` : Sửa giá tay\n"
+            "• `del [Mã]` : Xóa mã (Hoàn tiền)\n"
+            "• `del #[ID]` : Hoàn tác lệnh Bán\n"
+            "• `his [Mã/Ví]` : Xem Lịch sử\n"
+            "• `? [Câu hỏi]` : Hỏi AI CFO\n"
             "━━━━━━━━━━━━━━━━━━━"
         )
         markup = InlineKeyboardMarkup()
