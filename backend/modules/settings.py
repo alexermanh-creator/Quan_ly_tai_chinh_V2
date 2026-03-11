@@ -8,12 +8,11 @@ class SettingsModule:
         self._init_default_settings()
 
     def _init_default_settings(self):
-        """Khởi tạo các giá trị mặc định nếu chưa có trong Database"""
         defaults = {
             'crypto_rate': '25000',
-            'target_nav': '200000000', # 200 triệu mặc định
-            'gemini_keys': '', # Để trống sẽ dùng từ file .env
-            'auto_sync_interval': '30' # 30 phút mặc định
+            'target_nav': '200000000',
+            'gemini_keys': '',
+            'auto_sync_interval': '30'
         }
         for k, v in defaults.items():
             row = self.db.execute_query("SELECT value FROM settings WHERE key = ?", (k,), fetch_one=True)
@@ -54,7 +53,6 @@ class SettingsModule:
             InlineKeyboardButton("🤖 Quản lý AI Keys", callback_data="set_ai_keys"),
             InlineKeyboardButton("⏱️ Cài Auto-Sync", callback_data="set_sync")
         )
-        # NÚT HƯỚNG DẪN MỚI
         markup.add(InlineKeyboardButton("📖 Hướng dẫn Dùng Lệnh", callback_data="set_guide"))
         markup.add(InlineKeyboardButton("⚠️ KHÔI PHỤC CÀI ĐẶT GỐC", callback_data="set_factory_reset"))
         markup.add(InlineKeyboardButton("🔙 Đóng Menu", callback_data="set_close"))
@@ -67,20 +65,22 @@ class SettingsModule:
             "━━━━━━━━━━━━━━━━━━━\n"
             "Sếp có thể gõ trực tiếp các lệnh sau vào khung chat để thao tác siêu tốc:\n\n"
             "💵 **1. DÒNG TIỀN (VÍ MẸ)**\n"
-            "• `nap [Số tiền]` : Nạp tiền mặt (VD: `nap 50000000`)\n"
-            "• `rut [Số tiền]` : Rút tiền mặt ra khỏi hệ thống\n\n"
+            "• `nap [Số tiền]` : Nạp tiền (VD: `nap 50000000`)\n"
+            "• `rut [Số tiền]` : Rút tiền (VD: `rut 10000000`)\n\n"
             "📈 **2. CHỨNG KHOÁN (STOCK)**\n"
             "• Mua: `s [Mã] [SL] [Giá]` (VD: `s VPB 1000 25.5`)\n"
-            "• Bán: `s [Mã] -[SL] [Giá]` (VD: `s VPB -500 27`)\n"
-            "*(Lưu ý: Bán thì thêm dấu trừ `-` trước số lượng)*\n\n"
+            "• Bán: `s [Mã] -[SL] [Giá]` (Thêm dấu `-` trước SL)\n"
+            "• Cổ tức Tiền: `ct tien [Mã] [Số tiền]` (VD: `ct tien VPB 500k`)\n"
+            "• Cổ tức Cổ phiếu: `ct cp [Mã] [SL]` (VD: `ct cp VPB 150`)\n\n"
             "🟡 **3. CRYPTO (COIN)**\n"
             "• Mua: `c [Mã] [SL] [Giá USD]` (VD: `c ETH 0.5 2000`)\n"
             "• Bán: `c [Mã] -[SL] [Giá USD]`\n\n"
             "🛠 **4. TIỆN ÍCH KHÁC**\n"
-            "• `up [Mã] [Giá]` : Sửa giá thị trường bằng tay (VD: `up VPB 26`)\n"
-            "• `del [Mã]` : Xóa mã gõ nhầm & hoàn tiền (VD: `del VPB`)\n"
-            "• `his [Mã/Ví]` : Xem lịch sử nhanh (VD: `his VPB` hoặc `his nap`)\n"
-            "• `? [Câu hỏi]` : Hỏi AI CFO (VD: `? Nhận định danh mục`)\n"
+            "• `up [Mã] [Giá]` : Sửa giá tay (VD: `up VPB 26`)\n"
+            "• `del [Mã]` : Xóa mã (VD: `del VPB`)\n"
+            "• `del #[ID]` : Hoàn tác lệnh Bán (VD: `del #154`)\n"
+            "• `his [Mã/Ví]` : Lịch sử (VD: `his VPB` hoặc `his nap`)\n"
+            "• `? [Câu hỏi]` : Hỏi AI CFO (VD: `? Phân tích danh mục`)\n"
             "━━━━━━━━━━━━━━━━━━━"
         )
         markup = InlineKeyboardMarkup()
@@ -100,7 +100,6 @@ class SettingsModule:
                 text += f"{i+1}. `{masked}`\n"
         
         text += "━━━━━━━━━━━━━━━━━━━\n*Sếp muốn làm gì tiếp theo?*"
-        
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("➕ Thêm Key Mới", callback_data="ai_add_key"),
@@ -112,10 +111,7 @@ class SettingsModule:
     def get_factory_reset_warning(self):
         text = (
             "⚠️ **CẢNH BÁO NGUY HIỂM** ⚠️\n\n"
-            "Hành động này sẽ **XÓA SẠCH** toàn bộ:\n"
-            "- Lịch sử giao dịch (Nạp/Rút/Mua/Bán)\n"
-            "- Danh mục tài sản hiện tại\n"
-            "*(Các cài đặt Tỷ giá, API Key vẫn được giữ nguyên)*\n\n"
+            "Hành động này sẽ **XÓA SẠCH** toàn bộ Lịch sử và Danh mục.\n"
             "Sếp có CHẮC CHẮN muốn đập đi xây lại sổ sách không?"
         )
         markup = InlineKeyboardMarkup(row_width=2)
