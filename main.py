@@ -15,7 +15,6 @@ from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
 from backend.core.parser import parse_currency, parse_trade_command
 from backend.modules.ai_chat import AIChatModule
-# IMPORT MODULE CẬP NHẬT GIÁ NGẦM
 from backend.modules.price_updater import PriceUpdaterModule
 
 db = DatabaseRepo()
@@ -26,9 +25,7 @@ wallet_mod = WalletModule()
 data_mod = DataManagerModule()
 hist_mod = HistoryModule()
 report_mod = ReportModule()
-# KHỞI TẠO NÃO BỘ AI
 cfo_ai = AIChatModule()
-# KHỞI TẠO ĐỘNG CƠ ĐỒNG BỘ GIÁ (Cài đặt 30 phút quét 1 lần)
 auto_updater = PriceUpdaterModule(interval_minutes=30)
 
 # Biến toàn cục lưu trạng thái người dùng (Đang ở Menu nào)
@@ -43,7 +40,7 @@ def get_history_keyboard():
 
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
-    user_context[message.chat.id] = 'HOME' # Thoát khỏi phòng CFO
+    user_context[message.chat.id] = 'HOME'
     bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
 
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
@@ -116,18 +113,16 @@ def handle_docs(message):
         bot.reply_to(message, "⚠️ Vui lòng gửi file định dạng .json")
 
 # ==========================================
-# MODULE AI CFO (VÀO PHÒNG CFO)
+# MODULE AI CFO
 # ==========================================
 @bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
 def handle_cfo_ai_button(message):
     user_context[message.chat.id] = 'AI_CHAT' 
-    
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
         auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
         response = cfo_ai.chat_with_cfo(auto_prompt)
         response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
-        
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ CFO không thể truy cập sổ sách: {str(e)}")
@@ -144,12 +139,7 @@ def show_history(message):
 
 @bot.message_handler(func=lambda message: message.text in ["💵 LS Nạp/Rút", "📊 LS Chứng khoán", "🪙 LS Crypto", "🥇 LS Khác"])
 def handle_history_filters(message):
-    filter_map = {
-        "💵 LS Nạp/Rút": "CASH",
-        "📊 LS Chứng khoán": "STOCK",
-        "🪙 LS Crypto": "CRYPTO",
-        "🥇 LS Khác": "OTHER"
-    }
+    filter_map = {"💵 LS Nạp/Rút": "CASH", "📊 LS Chứng khoán": "STOCK", "🪙 LS Crypto": "CRYPTO", "🥇 LS Khác": "OTHER"}
     f_type = filter_map[message.text]
     msg, markup = hist_mod.get_history_ui(page=1, filter_type=f_type)
     bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
@@ -182,15 +172,18 @@ def handle_history_callbacks(call):
 def trade_ins(message):
     bot.reply_to(message, "➕ **LỆNH GIAO DỊCH**\n- Stock: `s [MÃ] [SL] [GIÁ VNĐ]`\n- Crypto: `c [MÃ] [SL] [GIÁ USD]`", parse_mode="Markdown")
 
-# HÀM BẮT SỰ KIỆN NÚT BẤM "CẬP NHẬT GIÁ" TRÊN MENU (GỌI MODULE PRICE UPDATER)
+# ==========================================
+# NÚT CẬP NHẬT GIÁ (ĐÃ ĐỒNG BỘ VỚI BÁO CÁO)
+# ==========================================
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def handle_auto_update_price(message):
     msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time cho Sếp...")
     try:
-        # SỬA LỖI TẠI ĐÂY: Bỏ điều kiện WHERE quantity != 0 để tránh lỗi định dạng số
-        rows = db.execute_query("SELECT DISTINCT symbol, wallet_id FROM holdings", fetch_one=False)
+        # SỬ DỤNG TRỰC TIẾP DỮ LIỆU TỪ REPORT MODULE
+        stats = report_mod._process_data()
+        holdings = stats['raw_data']['holdings']
         
-        if not rows:
+        if not holdings or len(holdings) == 0:
             bot.edit_message_text("⚠️ Danh mục trống hoặc chưa có mã nào được ghi nhận.", chat_id=message.chat.id, message_id=msg.message_id)
             return
 
@@ -199,7 +192,6 @@ def handle_auto_update_price(message):
         def _fetch_and_update(item):
             sym = item['symbol']
             w_type = item['wallet_id']
-            # Mượn tạm động cơ lấy giá từ module auto_updater
             price = auto_updater._get_realtime_price(sym, w_type)
             if price:
                 db.update_market_price(sym, price)
@@ -208,31 +200,9 @@ def handle_auto_update_price(message):
 
         # Tăng tốc bằng đa luồng
         with ThreadPoolExecutor(max_workers=5) as executor:
-            results = list(executor.map(_fetch_and_update, rows))
+            results = list(executor.map(_fetch_and_update, holdings))
         
-        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results)
-        bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
-        
-    except Exception as e:
-        bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
-
-        from concurrent.futures import ThreadPoolExecutor
-        
-        def _fetch_and_update(item):
-            sym = item['symbol']
-            w_type = item['wallet_id']
-            # Mượn tạm động cơ dò giá siêu việt của auto_updater
-            price = auto_updater._get_realtime_price(sym, w_type)
-            if price:
-                db.update_market_price(sym, price)
-                return f"✅ `{sym}`: {price:,.0f} đ"
-            return f"⚠️ `{sym}`: Rớt mạng (Giữ giá cũ)"
-
-        # Phái 5 lính chạy đa luồng đi cào giá
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            results = list(executor.map(_fetch_and_update, rows))
-        
-        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results) + "\n\n💡 _Nếu muốn cập nhật tay, sếp gõ: `up [MÃ] [GIÁ]`_"
+        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results) + "\n\n💡 _Gõ: `up [MÃ] [GIÁ]` để cập nhật tay_"
         bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
         
     except Exception as e:
@@ -256,7 +226,6 @@ def handle_manual_commands(message):
                     msg, markup = hist_mod.get_history_ui(filter_type='OTHER')
                 else: 
                     msg, markup = hist_mod.get_history_ui(symbol=term)
-                
                 bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
                 
         elif text.startswith('del '):
@@ -336,9 +305,6 @@ def handle_fallback_and_ai_chat(message):
         bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng sử dụng Menu hoặc gõ `? [câu hỏi]` để AI hỗ trợ.")
 
 if __name__ == "__main__":
-    # Kích hoạt chạy ngầm cập nhật giá mỗi 30p
     auto_updater.start_background_sync()
-    
     print("🤖 Hệ thống V3.4 đang chạy...")
     bot.polling(none_stop=True)
-
