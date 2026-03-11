@@ -13,7 +13,8 @@ from backend.modules.crypto import CryptoModule
 from backend.modules.data_manager import DataManagerModule
 from backend.modules.history import HistoryModule
 from backend.modules.report import ReportModule
-from backend.core.parser import parse_currency, parse_trade_command
+# NHẬP PARSER MỚI VÀO ĐÂY
+from backend.core.parser import parse_currency, parse_trade_command, parse_dividend_command
 from backend.modules.ai_chat import AIChatModule
 from backend.modules.price_updater import PriceUpdaterModule
 from backend.modules.settings import SettingsModule
@@ -263,13 +264,28 @@ def handle_auto_update_price(message):
         bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
 
 # ==========================================
-# BỘ XỬ LÝ LỆNH GÕ TAY (ĐÃ FIX: HỖ TRỢ DEL #ID)
+# BỘ XỬ LÝ LỆNH GÕ TAY (ĐÃ GẮN PARSER CỔ TỨC)
 # ==========================================
-@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ']))
+@bot.message_handler(func=lambda message: any(message.text.lower().startswith(x) for x in ['nap ', 'rut ', 'chuyen ', 'thu ', 's ', 'c ', 'k ', 'up ', 'rate ', 'his ', 'del ', 'ct ']))
 def handle_manual_commands(message):
     text = message.text.lower().strip()
     try:
-        if text.startswith('his '):
+        if text.startswith('ct '):
+            # Nhường việc bóc tách chuỗi cho parser
+            parsed = parse_dividend_command(text)
+            if not parsed:
+                bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Hãy dùng: `ct tien [MÃ] [TIỀN]` hoặc `ct cp [MÃ] [SỐ LƯỢNG]`\nVí dụ: `ct tien VPB 500k`", parse_mode="Markdown")
+                return
+                
+            action_type, sym, val = parsed
+            if action_type == 'tien':
+                success, msg_text = db.add_cash_dividend(sym, val)
+            else:
+                success, msg_text = db.add_stock_dividend(sym, val)
+                
+            bot.reply_to(message, msg_text, parse_mode="Markdown")
+
+        elif text.startswith('his '):
             parts = text.split()
             if len(parts) > 1:
                 term = parts[1].upper()
@@ -283,14 +299,12 @@ def handle_manual_commands(message):
         elif text.startswith('del '):
             param = text.split()[1].upper()
             if param.startswith('#'):
-                # XỬ LÝ LỆNH: del #154 (Hủy giao dịch)
                 try:
                     tx_id = int(param.replace('#', ''))
                     success, msg_text = db.undo_transaction(tx_id)
                 except ValueError:
                     msg_text = "⚠️ ID giao dịch không hợp lệ. Hãy gõ ví dụ: `del #154`"
             else:
-                # XỬ LÝ LỆNH: del USDT (Xóa hẳn mã và hoàn tiền)
                 _, msg_text = db.delete_holding_and_refund(param)
             bot.reply_to(message, msg_text, parse_mode="Markdown")
 
@@ -346,7 +360,6 @@ def handle_fallback_and_ai_chat(message):
     chat_id = message.chat.id
     ctx = user_context.get(chat_id)
 
-    # 1. BẮT TRẠNG THÁI CÀI ĐẶT
     if ctx == 'WAIT_RATE':
         try:
             val = float(text.replace(',', ''))
@@ -395,7 +408,6 @@ def handle_fallback_and_ai_chat(message):
         show_settings(message)
         return
 
-    # 2. XỬ LÝ AI CHAT
     user_query = None
     if text.startswith('?'):
         user_query = text[1:].strip()
