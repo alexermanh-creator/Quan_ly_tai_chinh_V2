@@ -54,9 +54,37 @@ class SettingsModule:
             InlineKeyboardButton("🤖 Quản lý AI Keys", callback_data="set_ai_keys"),
             InlineKeyboardButton("⏱️ Cài Auto-Sync", callback_data="set_sync")
         )
+        # NÚT HƯỚNG DẪN MỚI
+        markup.add(InlineKeyboardButton("📖 Hướng dẫn Dùng Lệnh", callback_data="set_guide"))
         markup.add(InlineKeyboardButton("⚠️ KHÔI PHỤC CÀI ĐẶT GỐC", callback_data="set_factory_reset"))
         markup.add(InlineKeyboardButton("🔙 Đóng Menu", callback_data="set_close"))
         
+        return text, markup
+
+    def get_guide_text(self):
+        text = (
+            "📖 **CẨM NANG DÙNG LỆNH V3.4** 📖\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "Sếp có thể gõ trực tiếp các lệnh sau vào khung chat để thao tác siêu tốc:\n\n"
+            "💵 **1. DÒNG TIỀN (VÍ MẸ)**\n"
+            "• `nap [Số tiền]` : Nạp tiền mặt (VD: `nap 50000000`)\n"
+            "• `rut [Số tiền]` : Rút tiền mặt ra khỏi hệ thống\n\n"
+            "📈 **2. CHỨNG KHOÁN (STOCK)**\n"
+            "• Mua: `s [Mã] [SL] [Giá]` (VD: `s VPB 1000 25.5`)\n"
+            "• Bán: `s [Mã] -[SL] [Giá]` (VD: `s VPB -500 27`)\n"
+            "*(Lưu ý: Bán thì thêm dấu trừ `-` trước số lượng)*\n\n"
+            "🟡 **3. CRYPTO (COIN)**\n"
+            "• Mua: `c [Mã] [SL] [Giá USD]` (VD: `c ETH 0.5 2000`)\n"
+            "• Bán: `c [Mã] -[SL] [Giá USD]`\n\n"
+            "🛠 **4. TIỆN ÍCH KHÁC**\n"
+            "• `up [Mã] [Giá]` : Sửa giá thị trường bằng tay (VD: `up VPB 26`)\n"
+            "• `del [Mã]` : Xóa mã gõ nhầm & hoàn tiền (VD: `del VPB`)\n"
+            "• `his [Mã/Ví]` : Xem lịch sử nhanh (VD: `his VPB` hoặc `his nap`)\n"
+            "• `? [Câu hỏi]` : Hỏi AI CFO (VD: `? Nhận định danh mục`)\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        )
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Quay lại Cài đặt", callback_data="set_main"))
         return text, markup
 
     def get_ai_keys_menu(self):
