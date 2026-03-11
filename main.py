@@ -104,6 +104,11 @@ def handle_settings_callbacks(call):
         user_context[chat_id] = 'WAIT_SYNC'
         bot.edit_message_text("⏱️ Sếp hãy gõ số phút cập nhật giá (VD: `15`, `30`, `60`. Gõ `0` để tắt):", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
 
+    # BẮT SỰ KIỆN NÚT HƯỚNG DẪN LỆNH
+    elif action == "set_guide":
+        text, markup = settings_mod.get_guide_text()
+        bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
+
     elif action == "set_ai_keys":
         text, markup = settings_mod.get_ai_keys_menu()
         bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
