@@ -371,13 +371,10 @@ def handle_fallback_and_ai_chat(message):
         return
 
     elif ctx == 'WAIT_TARGET':
-        try:
-            val = float(text.replace(',', ''))
-            settings_mod.update_setting('target_nav', val)
-            bot.reply_to(message, f"✅ Mục tiêu NAV đã lưu: {val:,.0f} đ")
-            show_settings(message)
-        except:
-            bot.reply_to(message, "❌ Sai định dạng số. Xin nhập lại.")
+        # KHÔNG ép kiểu float nữa, lưu thẳng Text tự nhiên của sếp vào database!
+        settings_mod.update_setting('goal', text.strip())
+        bot.reply_to(message, f"✅ Mục tiêu NAV đã lưu: {text.strip()}")
+        show_settings(message)
         return
 
     elif ctx == 'WAIT_SYNC':
@@ -436,3 +433,4 @@ if __name__ == "__main__":
     
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy...")
     bot.polling(none_stop=True)
+
