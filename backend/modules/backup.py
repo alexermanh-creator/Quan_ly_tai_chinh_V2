@@ -17,18 +17,22 @@ class BackupModule:
         if not os.path.exists(self.db_path):
             return None, None
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"backup_v3_{timestamp}.db"
+        # Format dùng để đặt tên file (Giữ nguyên gạch dưới)
+        timestamp_file = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Format dùng để hiển thị lên Telegram (Dùng / và : để không bị lỗi Markdown)
+        timestamp_display = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        
+        backup_filename = f"backup_v3_{timestamp_file}.db"
         
         try:
             shutil.copy2(self.db_path, backup_filename)
-            return backup_filename, timestamp
+            return backup_filename, timestamp_display
         except Exception as e:
             print(f"[Backup Error] Không thể copy db: {e}")
             return None, None
 
     def send_backup_to_user(self, chat_id, manual=False):
-        backup_file, timestamp = self.create_backup_file()
+        backup_file, timestamp_display = self.create_backup_file()
         if not backup_file:
             if manual:
                 self.bot.send_message(chat_id, "❌ Lỗi: Không tìm thấy file Database để sao lưu!")
@@ -37,9 +41,10 @@ class BackupModule:
         try:
             with open(backup_file, 'rb') as f:
                 if manual:
-                    caption = f"📦 **BACKUP SỔ SÁCH THỦ CÔNG**\n⏱️ {timestamp}\n\n✅ File `.db` này chứa toàn bộ lịch sử giao dịch và cấu hình của Sếp."
+                    # Chuyển ** thành * cho chuẩn Markdown của Telegram
+                    caption = f"📦 *BACKUP SỔ SÁCH THỦ CÔNG*\n⏱ {timestamp_display}\n\n✅ File `.db` này chứa toàn bộ lịch sử giao dịch và cấu hình của Sếp."
                 else:
-                    caption = f"🛡️ **AUTO-BACKUP HỆ THỐNG (12H/LẦN)**\n⏱️ {timestamp}\n\n💡 Đây là bản sao lưu tự động mới nhất. Server có sự cố thì Sếp up lại file này là xong!"
+                    caption = f"🛡 *AUTO-BACKUP HỆ THỐNG (12H/LẦN)*\n⏱ {timestamp_display}\n\n💡 Đây là bản sao lưu tự động mới nhất. Server có sự cố thì Sếp up lại file này là xong!"
                 
                 self.bot.send_document(chat_id, f, caption=caption, parse_mode="Markdown")
         except Exception as e:
