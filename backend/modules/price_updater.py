@@ -5,13 +5,29 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 from backend.database.repository import DatabaseRepo
 from backend.modules.report import ReportModule
+from backend.modules.settings import SettingsModule
 
 class PriceUpdaterModule:
     def __init__(self, interval_minutes=30):
         self.db = DatabaseRepo()
         self.report = ReportModule()
+        self.settings = SettingsModule()
         self.interval_seconds = interval_minutes * 60
         self.is_running = False
+
+    def fetch_usd_vnd_rate(self):
+        """Cào tỷ giá USD/VND từ Yahoo Finance (Uy tín, không bị chặn)"""
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            res = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/VND=X?region=US&lang=en-US", headers=headers, timeout=5)
+            if res.status_code == 200:
+                rate = float(res.json()['chart']['result'][0]['meta']['regularMarketPrice'])
+                if rate > 20000:
+                    self.settings.update_setting('crypto_rate', rate)
+                    return rate
+        except Exception as e:
+            print(f"[SYNC WARN] Lỗi lấy tỷ giá USD/VND: {e}")
+        return None
 
     def _get_realtime_price(self, symbol, wallet_type):
         """Động cơ dò giá 4 màng lọc - Đã nâng cấp chống Block IP"""
@@ -103,6 +119,9 @@ class PriceUpdaterModule:
     def sync_all_prices(self):
         print(f"[{time.strftime('%H:%M:%S')}] 🔄 Bắt đầu tiến trình đồng bộ giá thị trường...")
         try:
+            # Tự động cập nhật tỷ giá USD/VND ngầm
+            self.fetch_usd_vnd_rate()
+            
             stats = self.report._process_data()
             holdings = stats['raw_data']['holdings']
             
