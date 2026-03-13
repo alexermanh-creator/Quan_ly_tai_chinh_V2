@@ -31,7 +31,7 @@ report_mod = ReportModule()
 cfo_ai = AIChatModule()
 auto_updater = PriceUpdaterModule(interval_minutes=30)
 settings_mod = SettingsModule()
-backup_mod = BackupModule(bot, db.db_path) # KHỞI TẠO MODULE BACKUP
+backup_mod = BackupModule(bot, db.db_path)
 
 # Nạp API Keys từ Database vào AI nếu có
 db_keys = settings_mod.get_setting('gemini_keys')
@@ -50,16 +50,10 @@ def get_history_keyboard():
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
     user_context[message.chat.id] = 'HOME'
-    
-    # GHI NHẬN ADMIN ID KHI SẾP GÕ /start ĐỂ GỬI AUTO-BACKUP VỀ ĐÚNG NGƯỜI
     if message.text == "/start":
         settings_mod.update_setting('admin_chat_id', str(message.chat.id))
-        
     bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
 
-# ==========================================
-# LỆNH BACKUP KHẨN CẤP THỦ CÔNG
-# ==========================================
 @bot.message_handler(commands=['backup'])
 def manual_backup(message):
     bot.send_message(message.chat.id, "⏳ Đang trích xuất nén toàn bộ sổ sách hệ thống...")
@@ -248,13 +242,17 @@ def trade_ins(message):
 
 @bot.message_handler(func=lambda message: message.text == "🔄 Cập nhật giá")
 def handle_auto_update_price(message):
-    msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time cho Sếp...")
+    msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time và tỷ giá USD/VND...")
     try:
+        # Cập nhật tỷ giá USD/VND
+        new_rate = auto_updater.fetch_usd_vnd_rate()
+        rate_text = f"💱 **Tỷ giá USD/VND:** {new_rate:,.0f} đ\n" if new_rate else "💱 **Tỷ giá USD/VND:** Đang dùng giá cũ\n"
+
         stats = report_mod._process_data()
         holdings = stats['raw_data']['holdings']
         
         if not holdings or len(holdings) == 0:
-            bot.edit_message_text("⚠️ Danh mục trống hoặc chưa có mã nào được ghi nhận.", chat_id=message.chat.id, message_id=msg.message_id)
+            bot.edit_message_text(f"{rate_text}\n⚠️ Danh mục trống hoặc chưa có mã nào được ghi nhận.", chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
             return
 
         from concurrent.futures import ThreadPoolExecutor
@@ -264,13 +262,21 @@ def handle_auto_update_price(message):
             price = auto_updater._get_realtime_price(sym, w_type)
             if price:
                 db.update_market_price(sym, price)
-                return f"✅ `{sym}`: {price:,.0f} đ"
+                
+                # SỬA LỖI ĐỊNH DẠNG USD VÀ VNĐ CHO CHUẨN MỰC
+                if w_type == 'CRYPTO':
+                    if sym in ['USDT', 'USDC', 'BUSD', 'FDUSD']:
+                        current_rate = float(settings_mod.get_setting('crypto_rate') or 25400)
+                        return f"✅ `{sym}`: 1.00 USD (~{current_rate:,.0f} đ)"
+                    return f"✅ `{sym}`: ${price:,.2f}"
+                else:
+                    return f"✅ `{sym}`: {price:,.0f} đ"
             return f"⚠️ `{sym}`: Không lấy được giá"
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(_fetch_and_update, holdings))
         
-        res_text = "🔄 **KẾT QUẢ ĐỒNG BỘ GIÁ TỪ SÀN:**\n\n" + "\n".join(results) + "\n\n💡 _Gõ: `up [MÃ] [GIÁ]` để cập nhật tay_"
+        res_text = f"🔄 **KẾT QUẢ ĐỒNG BỘ TỪ SÀN:**\n{rate_text}\n" + "\n".join(results) + "\n\n💡 _Gõ: `up [MÃ] [GIÁ]` để cập nhật tay_"
         bot.edit_message_text(res_text, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
     except Exception as e:
         bot.edit_message_text(f"❌ Lỗi đồng bộ: {str(e)}", chat_id=message.chat.id, message_id=msg.message_id)
@@ -348,7 +354,7 @@ def handle_manual_commands(message):
             
             rate = 1
             if w_type == 'CRYPTO':
-                rate = float(settings_mod.get_setting('crypto_rate') or 25000.0)
+                rate = float(settings_mod.get_setting('crypto_rate') or 25400.0)
 
             total_vnd = abs(qty) * price * rate
             res = db.execute_trade(w_type, sym, qty, price, total_vnd)
@@ -458,9 +464,8 @@ if __name__ == "__main__":
         auto_updater.interval_seconds = interval * 60
         auto_updater.start_background_sync()
         
-    backup_mod.start_auto_backup() # KÍCH HOẠT VÒNG LẶP BACKUP TỰ ĐỘNG
+    backup_mod.start_auto_backup()
     
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy trên Render...")
     
-    # VŨ KHÍ TỐI THƯỢNG CHỐNG LỖI 409 TRÊN RENDER:
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
