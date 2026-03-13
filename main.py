@@ -17,6 +17,7 @@ from backend.core.parser import parse_currency, parse_trade_command, parse_divid
 from backend.modules.ai_chat import AIChatModule
 from backend.modules.price_updater import PriceUpdaterModule
 from backend.modules.settings import SettingsModule
+from backend.modules.backup import BackupModule
 
 # KHỞI TẠO CÁC MODULE
 db = DatabaseRepo()
@@ -30,6 +31,7 @@ report_mod = ReportModule()
 cfo_ai = AIChatModule()
 auto_updater = PriceUpdaterModule(interval_minutes=30)
 settings_mod = SettingsModule()
+backup_mod = BackupModule(bot, db.db_path) # KHỞI TẠO MODULE BACKUP
 
 # Nạp API Keys từ Database vào AI nếu có
 db_keys = settings_mod.get_setting('gemini_keys')
@@ -48,7 +50,20 @@ def get_history_keyboard():
 @bot.message_handler(func=lambda message: message.text in ["🏠 Trang chủ", "💼 Tài sản của bạn", "/start"])
 def show_home(message):
     user_context[message.chat.id] = 'HOME'
+    
+    # GHI NHẬN ADMIN ID KHI SẾP GÕ /start ĐỂ GỬI AUTO-BACKUP VỀ ĐÚNG NGƯỜI
+    if message.text == "/start":
+        settings_mod.update_setting('admin_chat_id', str(message.chat.id))
+        
     bot.send_message(message.chat.id, dash.get_main_dashboard(), reply_markup=get_home_keyboard())
+
+# ==========================================
+# LỆNH BACKUP KHẨN CẤP THỦ CÔNG
+# ==========================================
+@bot.message_handler(commands=['backup'])
+def manual_backup(message):
+    bot.send_message(message.chat.id, "⏳ Đang trích xuất nén toàn bộ sổ sách hệ thống...")
+    backup_mod.send_backup_to_user(message.chat.id, manual=True)
 
 @bot.message_handler(func=lambda message: message.text == "📊 Chứng Khoán")
 def show_stock(message):
@@ -186,7 +201,6 @@ def handle_cfo_ai_button(message):
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
         auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
-        # TRUYỀN CHAT ID ĐỂ NHỚ NGỮ CẢNH
         response = cfo_ai.chat_with_cfo(message.chat.id, auto_prompt)
         response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
@@ -368,7 +382,6 @@ def handle_fallback_and_ai_chat(message):
         return
 
     elif ctx == 'WAIT_TARGET':
-        # Lưu thẳng Text ngôn ngữ tự nhiên vào database
         settings_mod.update_setting('goal', text.strip())
         bot.reply_to(message, f"✅ Mục tiêu NAV đã lưu: {text.strip()}")
         show_settings(message)
@@ -415,7 +428,6 @@ def handle_fallback_and_ai_chat(message):
     if user_query:
         msg = bot.send_message(chat_id, "⏳ Hệ thống đang suy nghĩ...")
         try:
-            # TRUYỀN CHAT ID XUỐNG ĐỂ LƯU RAM
             response = cfo_ai.chat_with_cfo(chat_id, user_query)
             bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=response)
         except Exception as e:
@@ -440,23 +452,15 @@ if __name__ == "__main__":
     # Khởi chạy luồng Web ngầm
     threading.Thread(target=run_web, daemon=True).start()
 
-    # 2. Khởi chạy các tiến trình của Bot
+    # 2. Khởi chạy các tiến trình ngầm (Sync Giá & Auto-Backup)
     interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
     if interval > 0:
         auto_updater.interval_seconds = interval * 60
         auto_updater.start_background_sync()
-    
-    # ... (giữ nguyên phần code web ngầm ở trên) ...
-    
-    # 2. Khởi chạy các tiến trình của Bot
-    interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
-    if interval > 0:
-        auto_updater.interval_seconds = interval * 60
-        auto_updater.start_background_sync()
+        
+    backup_mod.start_auto_backup() # KÍCH HOẠT VÒNG LẶP BACKUP TỰ ĐỘNG
     
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy trên Render...")
     
     # VŨ KHÍ TỐI THƯỢNG CHỐNG LỖI 409 TRÊN RENDER:
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
-
-
