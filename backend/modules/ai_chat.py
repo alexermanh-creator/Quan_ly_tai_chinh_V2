@@ -20,8 +20,11 @@ class AIChatModule:
         self.api_keys = [k.strip() for k in keys_env.split(",") if k.strip()]
         self.current_key_idx = 0
         
-        # TỐI ƯU 1: LƯU CACHE TÊN MODEL (Giảm 2 giây mỗi lần chat)
+        # TỐI ƯU 1: LƯU CACHE TÊN MODEL
         self.cached_model_name = None 
+        
+        # TỐI ƯU MỚI: BỘ NHỚ RAM CHO TỪNG USER (CẤP ĐỘ 1)
+        self.chat_histories = defaultdict(list)
 
     def _get_configured_model(self):
         if not self.api_keys:
@@ -29,15 +32,12 @@ class AIChatModule:
         
         genai.configure(api_key=self.api_keys[self.current_key_idx])
         
-        # Nếu đã có Cache thì dùng luôn, cấm dò lại
         if self.cached_model_name:
-            # Ép temperature xuống 0.2 để AI tư duy logic, tính toán lạnh lùng, bớt nói hoa mỹ
             return genai.GenerativeModel(self.cached_model_name, generation_config={"temperature": 0.2})
         
         target_model = None
         try:
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            # Ưu tiên bản Pro mới nhất để suy luận logic sâu
             preferred_models = ['models/gemini-1.5-pro-latest', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash', 'models/gemini-pro']
             for pref in preferred_models:
                 if pref in available_models:
@@ -51,16 +51,14 @@ class AIChatModule:
         if not target_model:
             raise ValueError("Không tìm thấy model Gemini hợp lệ.")
 
-        # Lưu lại vào RAM để lần sau dùng ngay
         self.cached_model_name = target_model
         return genai.GenerativeModel(target_model, generation_config={"temperature": 0.2})
 
     def _switch_to_next_key(self):
         self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
-        self.cached_model_name = None # Xóa cache khi đổi API Key
+        self.cached_model_name = None 
 
     def _get_realtime_price(self, symbol, wallet_type):
-        """Hệ thống lấy giá xuyên tường lửa"""
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -93,12 +91,48 @@ class AIChatModule:
                     pass
 
         except Exception as e:
-            print(f"[AI WARN] Lỗi dò giá {symbol}: {e}")
+            pass
             
         return None
 
+    def _get_ta_data(self, symbol, wallet_type):
+        """RADAR PHÂN TÍCH KỸ THUẬT (CẤP ĐỘ 2) - Lấy RSI và MA20"""
+        try:
+            prices = []
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            symbol = symbol.upper().strip()
+            
+            if wallet_type == 'CRYPTO':
+                res = requests.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit=30", timeout=3)
+                if res.status_code == 200:
+                    prices = [float(k[4]) for k in res.json()]
+            elif wallet_type == 'STOCK':
+                res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?interval=1d&range=2mo", headers=headers, timeout=3)
+                if res.status_code == 200:
+                    prices = res.json()['chart']['result'][0]['indicators']['quote'][0]['close']
+                    prices = [p for p in prices if p is not None]
+            
+            if len(prices) >= 20:
+                ma20 = sum(prices[-20:]) / 20
+                
+                # Tính RSI (14)
+                deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+                gains = [d if d > 0 else 0 for d in deltas[-14:]]
+                losses = [-d if d < 0 else 0 for d in deltas[-14:]]
+                avg_gain = sum(gains) / 14
+                avg_loss = sum(losses) / 14
+                rs = (avg_gain / avg_loss) if avg_loss != 0 else 100
+                rsi = 100 - (100 / (1 + rs))
+                
+                trend = "Tăng" if prices[-1] > ma20 else "Giảm (Mất nền MA20)"
+                rsi_status = "Quá Bán (Dòng tiền hoảng loạn)" if rsi < 30 else "Quá Mua (Dòng tiền Fomo)" if rsi > 70 else "Trung tính"
+                
+                return f"MA20: {ma20:,.0f} ({trend}) | RSI(14): {rsi:.1f} ({rsi_status})"
+        except Exception:
+            pass
+        return "TA Data: Chưa rõ xu hướng"
+
     def _fetch_price_worker(self, item):
-        """Hàm công nhân chạy đa luồng cho từng mã"""
         sym = item['symbol']
         w_type = item['wallet_id']
         gia_realtime = self._get_realtime_price(sym, w_type)
@@ -112,7 +146,6 @@ class AIChatModule:
         }
 
     def get_portfolio_context(self):
-        # 1. LẤY DỮ LIỆU TỪ REPORT
         stats = self.report._process_data()
         raw_data = stats['raw_data']
         
@@ -123,7 +156,6 @@ class AIChatModule:
         
         chi_tiet = []
         
-        # TỐI ƯU 2: CHẠY ĐA LUỒNG QUÉT GIÁ REAL-TIME
         with ThreadPoolExecutor(max_workers=10) as executor:
             results = executor.map(self._fetch_price_worker, raw_data['holdings'])
             
@@ -138,21 +170,18 @@ class AIChatModule:
                 "loi_nhuan_tam_tinh": (gia_chot - r['gia_von']) * r['so_luong']
             })
 
-        # 2. BỔ SUNG: PHÂN TÍCH LỊCH SỬ GIAO DỊCH (ĐỂ TRẢ LỜI "THÁNG NÀO LÃI, MÃ NÀO LỖ")
         transactions = raw_data.get('transactions', [])
         total_realized = 0
         symbol_pnl = defaultdict(float)
         recent_closed_trades = []
 
         for tx in transactions:
-            # Lọc các lệnh Bán hoặc Chốt Lịch Sử có sinh ra Lãi/Lỗ
             if tx['type'] in ['BAN', 'CHOT_LICH_SU'] and tx['realized_pl']:
                 pl = tx['realized_pl']
                 total_realized += pl
                 sym = tx['symbol'] or "Lịch_Sử"
                 symbol_pnl[sym] += pl
                 
-                # Ghi nhận 15 lệnh bán gần nhất để AI nắm bắt dòng thời gian
                 if len(recent_closed_trades) < 15:
                     note = f" ({tx['note']})" if tx['note'] else ""
                     recent_closed_trades.append(f"Mã {sym}: {'Lãi' if pl > 0 else 'Lỗ'} {pl:,.0f} đ{note}")
@@ -182,56 +211,70 @@ class AIChatModule:
         }
         return context
 
-    def chat_with_cfo(self, user_message):
+    def chat_with_cfo(self, chat_id, user_message):
         context_data = self.get_portfolio_context()
         
-        # RADAR NHẬN DIỆN MÃ TÀI SẢN
         words = re.findall(r'\b[a-zA-Z]{3,5}\b', user_message)
         stop_words = {'gia', 'hom', 'nay', 'thi', 'sao', 'cho', 'toi', 'cfo', 'lam', 'the', 'nao', 'mua', 'ban', 'hay', 'con', 'lai', 'nua', 'qua', 'voi', 'cua', 'nen', 'giu', 'cat', 'anh', 'nha', 'tien', 'mat', 'rut', 'nap', 'kho', 'tot', 'xau', 'cai', 'mot', 'hai', 'vay', 'nhe'}
         potential_tickers = set([w.upper() for w in words if w.lower() not in stop_words])
-        existing_tickers = [item['ma_tai_san'] for item in context_data.get('chi_tiet_danh_muc_dang_om', [])]
         
-        ma_ngoai = []
+        radar_ta_data = []
         
-        # TỐI ƯU 3: CHẠY ĐA LUỒNG CHO CÁC MÃ SẾP HỎI THÊM
-        def _fetch_external_price(sym):
+        # TỐI ƯU 3: KÉO CẢ GIÁ VÀ CHỈ BÁO TA CHO CÁC MÃ ĐƯỢC NHẮC ĐẾN
+        def _fetch_external_ta(sym):
             price = self._get_realtime_price(sym, 'STOCK')
+            w_type = 'STOCK'
             if not price:
                 price = self._get_realtime_price(sym, 'CRYPTO')
-            return sym, price
+                w_type = 'CRYPTO'
+            if price:
+                ta_info = self._get_ta_data(sym, w_type)
+                return {"ma": sym, "gia_hien_tai": price, "chi_bao_ky_thuat": ta_info}
+            return None
 
-        external_to_fetch = [sym for sym in potential_tickers if sym not in existing_tickers]
-        if external_to_fetch:
+        if potential_tickers:
             with ThreadPoolExecutor(max_workers=5) as executor:
-                ext_results = executor.map(_fetch_external_price, external_to_fetch)
-                for sym, price in ext_results:
-                    if price:
-                        ma_ngoai.append({"ma": sym, "gia_hien_tai_vua_quet": price})
+                ext_results = executor.map(_fetch_external_ta, potential_tickers)
+                for res in ext_results:
+                    if res:
+                        radar_ta_data.append(res)
                         
-        if ma_ngoai:
-            context_data["ma_ngoai_danh_muc_vua_hoi"] = ma_ngoai
+        if radar_ta_data:
+            context_data["radar_phan_tich_ky_thuat_cac_ma_vua_hoi"] = radar_ta_data
+            
+        # TỐI ƯU 1: GÓI GỌN LỊCH SỬ CHAT (TRÁNH QUÊN MẠCH TRUYỆN)
+        history_text = "LỊCH SỬ HỘI THOẠI TRƯỚC ĐÓ:\n"
+        if self.chat_histories[chat_id]:
+            for turn in self.chat_histories[chat_id]:
+                history_text += f"- Sếp: {turn['user']}\n- CFO: {turn['cfo']}\n"
+        else:
+            history_text += "(Đây là câu hỏi đầu tiên của phiên)\n"
         
         system_prompt = f"""
-        Bạn là Siêu Trợ Lý AI của Hệ điều hành V3.4. Bạn sở hữu tri thức của nhân loại, đồng thời là Giám đốc Tài chính (CFO) sát thủ trên thị trường.
-        Luôn gọi người dùng là "Sếp" một cách kính trọng nhưng chuyên nghiệp (Tuyệt đối không dùng tên thật).
+        Bạn là CFO Quant Trader sát thủ. Nhiệm vụ của bạn là tư vấn quản lý tài sản và danh mục đầu tư.
         
-        CHẾ ĐỘ HOẠT ĐỘNG:
-        1. PHÂN TÍCH TÀI CHÍNH: Hóa thân thành CFO Thiết Quân Luật. Đọc kỹ dữ liệu LỊCH SỬ CHIẾN ĐẤU để biết Sếp đang lãi/lỗ dạo gần đây thế nào, mổ xẻ TỶ TRỌNG và TIỀN MẶT để lập Kế hoạch hành động (Action Plan) thực chiến. Đừng nói nước đôi, hãy chỉ đích danh mã nào gánh, mã nào phá.
-        2. KIẾN THỨC KHÁC: Trả lời như một LLM bách khoa toàn thư sắc sảo.
+        LỆNH TẨY NÃO (BẮT BUỘC TUÂN THỦ 100%):
+        1. KHÔNG BAO GIỜ DÙNG TỪ "Chào Sếp" hay lặp lại các câu chào hỏi sáo rỗng. Hãy đi thẳng vào vấn đề.
+        2. KHÔNG ĐƯỢC VIẾT HOA TOÀN BỘ CÂU HOẶC ĐOẠN VĂN. Chỉ được viết hoa tên mã cổ phiếu/coin hoặc thuật ngữ (VD: VPB, RSI, FED).
+        3. KHÔNG ĐỌC ĐỊNH NGHĨA WIKIPEDIA (VD: Không được giải thích HPG là tập đoàn sản xuất thép). 
+        4. BẮT BUỘC SỬ DỤNG SỐ LIỆU PHÂN TÍCH KỸ THUẬT (RSI, MA20) ở dưới để tư vấn Mua/Bán. Nếu RSI Quá Bán thì khuyên dò đáy, nếu Quá Mua thì khuyên chốt lời.
         
-        DỮ LIỆU QUÉT TOÀN CẢNH:
+        {history_text}
+        
+        DỮ LIỆU CẬP NHẬT TẠI THỜI ĐIỂM NÀY:
         {json.dumps(context_data, ensure_ascii=False)}
-        
-        KỶ LUẬT TRẢ LỜI QUAN TRỌNG (BẮT BUỘC):
-        - VĂN BẢN THUẦN TÚY: Tuyệt đối KHÔNG sử dụng Markdown phức tạp. KHÔNG DÙNG dấu sao (*), dấu gạch dưới (_), hay ngoặc vuông ([]). Nếu muốn nhấn mạnh, hãy viết IN HOA.
-        - ĐỊNH DẠNG: Chỉ dùng chữ, số, dấu câu thông thường và gạch đầu dòng (-) để liệt kê.
-        - ĐỘ DÀI VÀ CẤU TRÚC: Mặc định trả lời ngắn gọn, đánh thẳng vào trọng tâm. TRỪ KHI sếp yêu cầu đích danh số lượng, BẠN PHẢI TUÂN THỦ VÀ LIỆT KÊ ĐÚNG.
         """
 
         for _ in range(len(self.api_keys)):
             try:
                 model = self._get_configured_model()
-                response = model.generate_content(f"{system_prompt}\n\n[Lệnh/Câu hỏi từ Sếp]: {user_message}")
+                response = model.generate_content(f"{system_prompt}\n\n[Sếp hỏi]: {user_message}")
+                
+                # Lưu lại bộ nhớ RAM
+                self.chat_histories[chat_id].append({"user": user_message, "cfo": response.text})
+                if len(self.chat_histories[chat_id]) > 5: # Chỉ nhớ 5 vòng lặp gần nhất để AI ko bị ngợp
+                    self.chat_histories[chat_id].pop(0)
+                    
                 return response.text
             
             except Exception as e:
