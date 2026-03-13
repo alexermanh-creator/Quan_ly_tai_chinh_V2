@@ -131,7 +131,6 @@ def handle_settings_callbacks(call):
     elif action == "confirm_reset_yes":
         bot.answer_callback_query(call.id, "⏳ Đang dọn dẹp sổ sách...")
         try:
-            # FIX LỖI 100% DRAWDOWN: Xóa trắng hoàn toàn cả Vốn Nạp và Rút
             db.execute_query("DELETE FROM transactions")
             db.execute_query("DELETE FROM holdings")
             db.execute_query("UPDATE wallets SET balance = 0, total_in = 0, total_out = 0")
@@ -187,7 +186,8 @@ def handle_cfo_ai_button(message):
     msg = bot.send_message(message.chat.id, "⏳ CFO đang lấy sổ sách ra rà soát, sếp đợi một lát...")
     try:
         auto_prompt = "Hãy quét toàn cảnh danh mục của tôi hiện tại. Đưa ra một bản báo cáo tàn nhẫn nhất về các khoản lỗ, tỷ trọng mất cân bằng và yêu cầu tôi hành động ngay lập tức."
-        response = cfo_ai.chat_with_cfo(auto_prompt)
+        # TRUYỀN CHAT ID ĐỂ NHỚ NGỮ CẢNH
+        response = cfo_ai.chat_with_cfo(message.chat.id, auto_prompt)
         response += "\n\n💡 (Sếp đang ở trong phòng CFO. Sếp có thể chat tự nhiên ngay tại đây. Bấm nút Menu khác để thoát)."
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=response)
     except Exception as e:
@@ -415,7 +415,8 @@ def handle_fallback_and_ai_chat(message):
     if user_query:
         msg = bot.send_message(chat_id, "⏳ Hệ thống đang suy nghĩ...")
         try:
-            response = cfo_ai.chat_with_cfo(user_query)
+            # TRUYỀN CHAT ID XUỐNG ĐỂ LƯU RAM
+            response = cfo_ai.chat_with_cfo(chat_id, user_query)
             bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=response)
         except Exception as e:
             bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"❌ Lỗi kết nối API: {str(e)}")
