@@ -446,6 +446,17 @@ if __name__ == "__main__":
         auto_updater.interval_seconds = interval * 60
         auto_updater.start_background_sync()
     
+    # ... (giữ nguyên phần code web ngầm ở trên) ...
+    
+    # 2. Khởi chạy các tiến trình của Bot
+    interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
+    if interval > 0:
+        auto_updater.interval_seconds = interval * 60
+        auto_updater.start_background_sync()
+    
     print("🤖 Hệ thống V3.4 Plug & Play đang chạy trên Render...")
-    bot.polling(none_stop=True)
+    
+    # VŨ KHÍ TỐI THƯỢNG CHỐNG LỖI 409 TRÊN RENDER:
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+
 
