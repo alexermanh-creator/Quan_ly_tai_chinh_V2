@@ -15,15 +15,11 @@ class AIChatModule:
         self.db = DatabaseRepo()
         self.report = ReportModule()
         
-        # Lấy danh sách API Keys từ .env (main.py có thể ghi đè biến này từ Database)
         keys_env = os.environ.get("GEMINI_API_KEYS", "")
         self.api_keys = [k.strip() for k in keys_env.split(",") if k.strip()]
         self.current_key_idx = 0
         
-        # TỐI ƯU 1: LƯU CACHE TÊN MODEL
         self.cached_model_name = None 
-        
-        # TỐI ƯU MỚI: BỘ NHỚ RAM CHO TỪNG USER (CẤP ĐỘ 1)
         self.chat_histories = defaultdict(list)
 
     def _get_configured_model(self):
@@ -66,9 +62,31 @@ class AIChatModule:
             symbol = symbol.upper().strip()
 
             if wallet_type == 'CRYPTO':
-                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
-                if res.status_code == 200:
-                    return float(res.json()['price'])
+                if symbol in ['USDT', 'USDC', 'FDUSD', 'BUSD']:
+                    return 1.0
+
+                try:
+                    res = requests.get(f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}-USDT", timeout=3)
+                    if res.status_code == 200 and res.json().get('data'):
+                        return float(res.json()['data']['price'])
+                except Exception:
+                    pass
+
+                try:
+                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}-USD?region=US&lang=en-US"
+                    res = requests.get(url, headers=headers, timeout=3)
+                    if res.status_code == 200:
+                        price = float(res.json()['chart']['result'][0]['meta']['regularMarketPrice'])
+                        if price > 0: return price
+                except Exception:
+                    pass
+
+                try:
+                    res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
+                    if res.status_code == 200:
+                        return float(res.json()['price'])
+                except Exception:
+                    pass
             
             elif wallet_type == 'STOCK':
                 try:
@@ -103,9 +121,27 @@ class AIChatModule:
             symbol = symbol.upper().strip()
             
             if wallet_type == 'CRYPTO':
-                res = requests.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit=30", timeout=3)
-                if res.status_code == 200:
-                    prices = [float(k[4]) for k in res.json()]
+                if symbol in ['USDT', 'USDC']:
+                    return "Stablecoin: Tỷ giá neo cứng ở 1 USD"
+                    
+                # Ưu tiên Yahoo Finance cho Crypto để tránh block IP
+                try:
+                    res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}-USD?interval=1d&range=2mo", headers=headers, timeout=3)
+                    if res.status_code == 200:
+                        prices = res.json()['chart']['result'][0]['indicators']['quote'][0]['close']
+                        prices = [p for p in prices if p is not None]
+                except Exception:
+                    pass
+
+                # Nếu xịt thì móc Binance
+                if not prices:
+                    try:
+                        res = requests.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit=30", timeout=3)
+                        if res.status_code == 200:
+                            prices = [float(k[4]) for k in res.json()]
+                    except Exception:
+                        pass
+
             elif wallet_type == 'STOCK':
                 res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?interval=1d&range=2mo", headers=headers, timeout=3)
                 if res.status_code == 200:
@@ -119,15 +155,19 @@ class AIChatModule:
                 deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
                 gains = [d if d > 0 else 0 for d in deltas[-14:]]
                 losses = [-d if d < 0 else 0 for d in deltas[-14:]]
-                avg_gain = sum(gains) / 14
-                avg_loss = sum(losses) / 14
-                rs = (avg_gain / avg_loss) if avg_loss != 0 else 100
-                rsi = 100 - (100 / (1 + rs))
+                avg_gain = sum(gains) / 14 if len(gains) > 0 else 0
+                avg_loss = sum(losses) / 14 if len(losses) > 0 else 0
+                
+                if avg_loss == 0:
+                    rsi = 100
+                else:
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
                 
                 trend = "Tăng" if prices[-1] > ma20 else "Giảm (Mất nền MA20)"
-                rsi_status = "Quá Bán (Dòng tiền hoảng loạn)" if rsi < 30 else "Quá Mua (Dòng tiền Fomo)" if rsi > 70 else "Trung tính"
+                rsi_status = "Quá Bán (Hoảng loạn)" if rsi < 30 else "Quá Mua (Fomo)" if rsi > 70 else "Trung tính"
                 
-                return f"MA20: {ma20:,.0f} ({trend}) | RSI(14): {rsi:.1f} ({rsi_status})"
+                return f"MA20: {ma20:,.2f} ({trend}) | RSI(14): {rsi:.1f} ({rsi_status})"
         except Exception:
             pass
         return "TA Data: Chưa rõ xu hướng"
@@ -220,7 +260,6 @@ class AIChatModule:
         
         radar_ta_data = []
         
-        # TỐI ƯU 3: KÉO CẢ GIÁ VÀ CHỈ BÁO TA CHO CÁC MÃ ĐƯỢC NHẮC ĐẾN
         def _fetch_external_ta(sym):
             price = self._get_realtime_price(sym, 'STOCK')
             w_type = 'STOCK'
@@ -242,7 +281,6 @@ class AIChatModule:
         if radar_ta_data:
             context_data["radar_phan_tich_ky_thuat_cac_ma_vua_hoi"] = radar_ta_data
             
-        # TỐI ƯU 1: GÓI GỌN LỊCH SỬ CHAT (TRÁNH QUÊN MẠCH TRUYỆN)
         history_text = "LỊCH SỬ HỘI THOẠI TRƯỚC ĐÓ:\n"
         if self.chat_histories[chat_id]:
             for turn in self.chat_histories[chat_id]:
@@ -270,9 +308,8 @@ class AIChatModule:
                 model = self._get_configured_model()
                 response = model.generate_content(f"{system_prompt}\n\n[Sếp hỏi]: {user_message}")
                 
-                # Lưu lại bộ nhớ RAM
                 self.chat_histories[chat_id].append({"user": user_message, "cfo": response.text})
-                if len(self.chat_histories[chat_id]) > 5: # Chỉ nhớ 5 vòng lặp gần nhất để AI ko bị ngợp
+                if len(self.chat_histories[chat_id]) > 5:
                     self.chat_histories[chat_id].pop(0)
                     
                 return response.text
