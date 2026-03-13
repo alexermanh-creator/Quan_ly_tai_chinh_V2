@@ -17,9 +17,7 @@ class BackupModule:
         if not os.path.exists(self.db_path):
             return None, None
         
-        # Format dùng để đặt tên file (Giữ nguyên gạch dưới)
         timestamp_file = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Format dùng để hiển thị lên Telegram (Dùng / và : để không bị lỗi Markdown)
         timestamp_display = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
         backup_filename = f"backup_v3_{timestamp_file}.db"
@@ -41,12 +39,13 @@ class BackupModule:
         try:
             with open(backup_file, 'rb') as f:
                 if manual:
-                    # Chuyển ** thành * cho chuẩn Markdown của Telegram
-                    caption = f"📦 *BACKUP SỔ SÁCH THỦ CÔNG*\n⏱ {timestamp_display}\n\n✅ File `.db` này chứa toàn bộ lịch sử giao dịch và cấu hình của Sếp."
+                    # Đã gỡ bỏ toàn bộ ký tự Markdown (*, _, `)
+                    caption = f"📦 BACKUP SỔ SÁCH THỦ CÔNG\n⏱ {timestamp_display}\n\n✅ File DB này chứa toàn bộ lịch sử giao dịch và cấu hình của Sếp."
                 else:
-                    caption = f"🛡 *AUTO-BACKUP HỆ THỐNG (12H/LẦN)*\n⏱ {timestamp_display}\n\n💡 Đây là bản sao lưu tự động mới nhất. Server có sự cố thì Sếp up lại file này là xong!"
+                    caption = f"🛡 AUTO-BACKUP HỆ THỐNG (12H/LẦN)\n⏱ {timestamp_display}\n\n💡 Đây là bản sao lưu tự động mới nhất. Server có sự cố thì Sếp up lại file này là xong!"
                 
-                self.bot.send_document(chat_id, f, caption=caption, parse_mode="Markdown")
+                # QUAN TRỌNG NHẤT: Bỏ parse_mode="Markdown" để chống lỗi tuyệt đối
+                self.bot.send_document(chat_id, f, caption=caption)
         except Exception as e:
             if manual:
                 self.bot.send_message(chat_id, f"❌ Lỗi gửi file backup: {str(e)}")
