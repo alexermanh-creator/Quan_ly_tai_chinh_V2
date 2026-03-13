@@ -8,3 +8,4 @@ numpy
 scipy
 google-generativeai
 yfinance==0.2.37
+Flask==3.0.0
