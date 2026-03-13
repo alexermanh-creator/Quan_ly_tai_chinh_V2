@@ -114,7 +114,6 @@ class AIChatModule:
         return None
 
     def _get_ta_data(self, symbol, wallet_type):
-        """RADAR PHÂN TÍCH KỸ THUẬT (CẤP ĐỘ 2) - Lấy RSI và MA20"""
         try:
             prices = []
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -124,7 +123,6 @@ class AIChatModule:
                 if symbol in ['USDT', 'USDC']:
                     return "Stablecoin: Tỷ giá neo cứng ở 1 USD"
                     
-                # Ưu tiên Yahoo Finance cho Crypto để tránh block IP
                 try:
                     res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}-USD?interval=1d&range=2mo", headers=headers, timeout=3)
                     if res.status_code == 200:
@@ -133,7 +131,6 @@ class AIChatModule:
                 except Exception:
                     pass
 
-                # Nếu xịt thì móc Binance
                 if not prices:
                     try:
                         res = requests.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit=30", timeout=3)
@@ -151,7 +148,6 @@ class AIChatModule:
             if len(prices) >= 20:
                 ma20 = sum(prices[-20:]) / 20
                 
-                # Tính RSI (14)
                 deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
                 gains = [d if d > 0 else 0 for d in deltas[-14:]]
                 losses = [-d if d < 0 else 0 for d in deltas[-14:]]
