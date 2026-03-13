@@ -424,10 +424,28 @@ def handle_fallback_and_ai_chat(message):
         bot.reply_to(message, "⚠️ Lệnh không hợp lệ. Vui lòng gõ `/settings` để mở Cài đặt, hoặc gõ `? [câu hỏi]` để AI hỗ trợ.")
 
 if __name__ == "__main__":
+    from flask import Flask
+    import threading
+
+    # 1. Khởi tạo Dummy Web Server cho Render
+    app = Flask(__name__)
+    @app.route('/')
+    def home():
+        return "Hệ điều hành V3.4 - CFO AI đang hoạt động bình thường!"
+
+    def run_web():
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host="0.0.0.0", port=port)
+
+    # Khởi chạy luồng Web ngầm
+    threading.Thread(target=run_web, daemon=True).start()
+
+    # 2. Khởi chạy các tiến trình của Bot
     interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
     if interval > 0:
         auto_updater.interval_seconds = interval * 60
         auto_updater.start_background_sync()
     
-    print("🤖 Hệ thống V3.4 Plug & Play đang chạy...")
+    print("🤖 Hệ thống V3.4 Plug & Play đang chạy trên Render...")
     bot.polling(none_stop=True)
+
