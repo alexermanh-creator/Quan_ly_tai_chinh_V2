@@ -14,7 +14,7 @@ class PriceUpdaterModule:
         self.is_running = False
 
     def _get_realtime_price(self, symbol, wallet_type):
-        """Động cơ dò giá 4 màng lọc (Tái sử dụng siêu việt)"""
+        """Động cơ dò giá 4 màng lọc - Đã nâng cấp chống Block IP"""
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -23,8 +23,30 @@ class PriceUpdaterModule:
             symbol = symbol.upper().strip()
 
             if wallet_type == 'CRYPTO':
+                if symbol in ['USDT', 'USDC', 'FDUSD', 'BUSD']:
+                    return 1.0  # Stablecoin mặc định = 1 USD
+
+                # 1. Thử KuCoin (Vượt tường lửa Render cực mượt)
                 try:
-                    res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
+                    res = requests.get(f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}-USDT", timeout=4)
+                    if res.status_code == 200 and res.json().get('data'):
+                        return float(res.json()['data']['price'])
+                except Exception:
+                    pass
+                
+                # 2. Thử Yahoo Finance (Nguồn uy tín, không giới hạn IP)
+                try:
+                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}-USD?region=US&lang=en-US"
+                    res = requests.get(url, headers=headers, timeout=4)
+                    if res.status_code == 200:
+                        price = float(res.json()['chart']['result'][0]['meta']['regularMarketPrice'])
+                        if price > 0: return price
+                except Exception:
+                    pass
+
+                # 3. Thử Binance (Dự phòng cuối)
+                try:
+                    res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
                     if res.status_code == 200:
                         return float(res.json()['price'])
                 except Exception:
@@ -75,13 +97,12 @@ class PriceUpdaterModule:
         
         if price:
             self.db.update_market_price(sym, price)
-            return f"✅ {sym}: {price:,.0f} đ"
-        return f"❌ {sym}: Lỗi kết nối / Mã không tồn tại"
+            return f"✅ {sym}: {price:,.2f} {'đ' if w_type == 'STOCK' else 'USD'}"
+        return f"⚠️ {sym}: Không lấy được giá (Bị chặn/Sai mã)"
 
     def sync_all_prices(self):
         print(f"[{time.strftime('%H:%M:%S')}] 🔄 Bắt đầu tiến trình đồng bộ giá thị trường...")
         try:
-            # SỬ DỤNG TRỰC TIẾP DỮ LIỆU TỪ REPORT MODULE
             stats = self.report._process_data()
             holdings = stats['raw_data']['holdings']
             
