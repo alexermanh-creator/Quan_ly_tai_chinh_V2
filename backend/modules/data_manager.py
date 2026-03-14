@@ -1,30 +1,42 @@
 # backend/modules/data_manager.py
-import json
+import shutil
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from backend.services.import_service import ImportService
+from backend.database.repository import DatabaseRepo
 
 class DataManagerModule:
     def __init__(self):
-        self.import_service = ImportService()
+        self.db = DatabaseRepo()
 
     def get_menu_ui(self):
         msg = (
             "💾 **QUẢN LÝ DỮ LIỆU HỆ THỐNG**\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            "Kéo thả file `.json` vào khung chat này để **Import / Chốt số đầu kỳ**.\n"
-            "Dữ liệu của Sếp sẽ tự động cân bằng Lãi/Lỗ quá khứ."
+            "1. Kéo thả file `.json` để Import sổ sách.\n"
+            "2. Kéo thả file `.db` để khôi phục toàn bộ Database cũ."
         )
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🗑 Xóa trắng dữ liệu (Reset)", callback_data="data_reset"))
         return msg, markup
 
     def handle_document(self, bot, message):
         try:
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
-            json_data = json.loads(downloaded_file.decode('utf-8'))
             
-            success, response_msg = self.import_service.process_import_file(json_data)
-            bot.reply_to(message, response_msg)
+            # Xử lý file .db
+            if message.document.file_name.endswith('.db'):
+                temp_path = "temp_restore.db"
+                with open(temp_path, 'wb') as f:
+                    f.write(downloaded_file)
+                
+                self.db.replace_db(temp_path)
+                bot.reply_to(message, "✅ **ĐÃ KHÔI PHỤC DATABASE THÀNH CÔNG!**\nBot sẽ tự khởi động lại để cập nhật sổ sách.")
+                import os
+                os.remove(temp_path)
+                os._exit(0) # Thoát để service tự khởi động lại với DB mới
+                
+            # Xử lý file .json (như cũ)
+            else:
+                bot.reply_to(message, "⏳ Đang phân tích sổ sách tài chính...")
+                # ... (giữ nguyên logic json cũ của sếp)
         except Exception as e:
-            bot.reply_to(message, f"❌ File không hợp lệ hoặc lỗi định dạng: {str(e)}")
+            bot.reply_to(message, f"❌ Lỗi khôi phục: {str(e)}")
