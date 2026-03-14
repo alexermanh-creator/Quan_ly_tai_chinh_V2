@@ -1,32 +1,43 @@
+# backend/database/models.py
+
 SCHEMA = """
 -- Bảng ví tiền
 CREATE TABLE IF NOT EXISTS wallets (
     id TEXT PRIMARY KEY,
-    balance REAL DEFAULT 0,
-    total_in REAL DEFAULT 0,
-    total_out REAL DEFAULT 0
+    balance DOUBLE PRECISION DEFAULT 0,
+    total_in DOUBLE PRECISION DEFAULT 0,
+    total_out DOUBLE PRECISION DEFAULT 0
 );
 
 -- Bảng danh mục đầu tư
 CREATE TABLE IF NOT EXISTS holdings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     wallet_id TEXT,
     symbol TEXT,
-    quantity REAL DEFAULT 0,
-    average_price REAL DEFAULT 0,
+    quantity DOUBLE PRECISION DEFAULT 0,
+    average_price DOUBLE PRECISION DEFAULT 0,
+    current_price DOUBLE PRECISION DEFAULT 0,
+    cost_basis_vnd DOUBLE PRECISION DEFAULT 0,
     UNIQUE(wallet_id, symbol)
 );
 
 -- Bảng lịch sử giao dịch
 CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     wallet_id TEXT,
     type TEXT,
     symbol TEXT,
-    quantity REAL DEFAULT 0,
-    price REAL DEFAULT 0,
-    amount REAL DEFAULT 0,
-    realized_pl REAL DEFAULT 0,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    quantity DOUBLE PRECISION DEFAULT 0,
+    price DOUBLE PRECISION DEFAULT 0,
+    amount DOUBLE PRECISION DEFAULT 0,
+    realized_pl DOUBLE PRECISION DEFAULT 0,
+    note TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bảng cài đặt
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 """
