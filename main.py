@@ -185,8 +185,7 @@ def show_data_menu(message):
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
-    if message.document.file_name.endswith('.json'):
-        bot.reply_to(message, "⏳ Đang phân tích sổ sách tài chính...")
+    if message.document.file_name.endswith('.json') or message.document.file_name.endswith('.db'):
         data_mod.handle_document(bot, message)
 
 @bot.message_handler(func=lambda message: message.text in ["🤖 AI Chat", "🤖 Trợ lý AI"])
@@ -244,7 +243,6 @@ def trade_ins(message):
 def handle_auto_update_price(message):
     msg = bot.send_message(message.chat.id, "⏳ Đang phi lên sàn cào giá Real-time và tỷ giá USD/VND...")
     try:
-        # Cập nhật tỷ giá USD/VND
         new_rate = auto_updater.fetch_usd_vnd_rate()
         rate_text = f"💱 **Tỷ giá USD/VND:** {new_rate:,.0f} đ\n" if new_rate else "💱 **Tỷ giá USD/VND:** Đang dùng giá cũ\n"
 
@@ -262,8 +260,6 @@ def handle_auto_update_price(message):
             price = auto_updater._get_realtime_price(sym, w_type)
             if price:
                 db.update_market_price(sym, price)
-                
-                # SỬA LỖI ĐỊNH DẠNG USD VÀ VNĐ CHO CHUẨN MỰC
                 if w_type == 'CRYPTO':
                     if sym in ['USDT', 'USDC', 'BUSD', 'FDUSD']:
                         current_rate = float(settings_mod.get_setting('crypto_rate') or 25400)
@@ -445,21 +441,19 @@ if __name__ == "__main__":
     from flask import Flask
     import threading
 
-    # 1. Khởi tạo Web Server (Duy trì mạng)
+    # 1. Khởi tạo Dummy Web Server cho Render (Tắt Debug để không block luồng chính)
     app = Flask(__name__)
     @app.route('/')
     def home():
-        return "CFO AI System Online!"
+        return "Hệ điều hành V3.4 - CFO AI đang hoạt động bình thường!"
 
     def run_web():
         port = int(os.environ.get("PORT", 10000))
-        app.run(host="0.0.0.0", port=port)
+        # KHÔNG ĐƯỢC BẬT use_reloader=True, NÓ SẼ GIẾT CHẾT BOT
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+    # Khởi chạy luồng Web ngầm
     threading.Thread(target=run_web, daemon=True).start()
-
-    # 2. KHỞI CHẠY BOT (Phần này phải chạy chính, KHÔNG ĐƯỢC CÓ DẤU #)
-    print("🤖 Bot đang bắt đầu polling...")
-    bot.infinity_polling(timeout=60, long_polling_timeout=5)
 
     # 2. Khởi chạy các tiến trình ngầm (Sync Giá & Auto-Backup)
     interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
@@ -469,6 +463,8 @@ if __name__ == "__main__":
         
     backup_mod.start_auto_backup()
     
-    print("🤖 Hệ thống V3.4 Plug & Play đang chạy trên Render...")
+    print("🤖 Hệ thống V3.4 đang chạy trên VPS Oracle...")
+    print("🤖 Bắt đầu lắng nghe Telegram...")
     
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    # BẮT BUỘC PHẢI LÀ DÒNG CUỐI CÙNG
+    bot.infinity_polling(timeout=20, long_polling_timeout=20)
