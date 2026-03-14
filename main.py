@@ -449,8 +449,8 @@ if __name__ == "__main__":
 
     def run_web():
         port = int(os.environ.get("PORT", 10000))
-        # KHÔNG ĐƯỢC BẬT use_reloader=True, NÓ SẼ GIẾT CHẾT BOT
-        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        # Thêm threaded=True để nó không chặn luồng chính
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
 
     # Khởi chạy luồng Web ngầm
     threading.Thread(target=run_web, daemon=True).start()
