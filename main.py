@@ -445,18 +445,21 @@ if __name__ == "__main__":
     from flask import Flask
     import threading
 
-    # 1. Khởi tạo Dummy Web Server cho Render
+    # 1. Khởi tạo Web Server (Duy trì mạng)
     app = Flask(__name__)
     @app.route('/')
     def home():
-        return "Hệ điều hành V3.4 - CFO AI đang hoạt động bình thường!"
+        return "CFO AI System Online!"
 
     def run_web():
         port = int(os.environ.get("PORT", 10000))
         app.run(host="0.0.0.0", port=port)
 
-    # Khởi chạy luồng Web ngầm
-    #threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=run_web, daemon=True).start()
+
+    # 2. KHỞI CHẠY BOT (Phần này phải chạy chính, KHÔNG ĐƯỢC CÓ DẤU #)
+    print("🤖 Bot đang bắt đầu polling...")
+    bot.infinity_polling(timeout=60, long_polling_timeout=5)
 
     # 2. Khởi chạy các tiến trình ngầm (Sync Giá & Auto-Backup)
     interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
