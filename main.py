@@ -456,7 +456,7 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=port)
 
     # Khởi chạy luồng Web ngầm
-    threading.Thread(target=run_web, daemon=True).start()
+    #threading.Thread(target=run_web, daemon=True).start()
 
     # 2. Khởi chạy các tiến trình ngầm (Sync Giá & Auto-Backup)
     interval = int(settings_mod.get_setting('auto_sync_interval') or 30)
