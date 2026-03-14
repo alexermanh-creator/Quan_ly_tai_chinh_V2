@@ -24,6 +24,21 @@ class DatabaseRepo:
             conn.close()
 
     def execute_query(self, query, params=(), fetch_one=False, fetch_all=False):
+        # ==========================================
+        # BỘ CHUYỂN ĐỔI NGÔN NGỮ TỰ ĐỘNG (SQLITE -> POSTGRESQL)
+        # ==========================================
+        # 1. Tự động dịch dấu ? sang %s
+        query = query.replace("?", "%s")
+        
+        # 2. Tự động dịch lệnh INSERT OR REPLACE của SQLite
+        if "INSERT OR REPLACE INTO settings" in query:
+            query = query.replace("INSERT OR REPLACE INTO settings", "INSERT INTO settings")
+            query += " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+            
+        if "INSERT OR IGNORE" in query:
+            query = query.replace("INSERT OR IGNORE", "INSERT")
+            query += " ON CONFLICT DO NOTHING"
+
         conn = psycopg2.connect(self.db_url)
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
