@@ -20,174 +20,139 @@ class AIChatModule:
         self.current_key_idx = 0
         
         self.chat_histories = defaultdict(list)
+        # Biến lưu tên model đã test thành công để không phải dò lại
+        self.confirmed_model = None 
 
-    def _get_model(self):
+    def _get_configured_model(self):
         if not self.api_keys:
-            raise ValueError("⚠️ Hệ thống chưa được nạp GEMINI_API_KEYS. Sếp hãy vào Cài đặt để thêm!")
+            raise ValueError("⚠️ Chưa nạp API Keys trong file .env!")
         
         genai.configure(api_key=self.api_keys[self.current_key_idx])
-        # SỬA LỖI: Dùng model 'gemini-1.5-flash' để đảm bảo tính tương thích và tốc độ
-        return genai.GenerativeModel('gemini-1.5-flash', generation_config={"temperature": 0.3})
+        
+        # Nếu đã dò được model đúng trước đó thì dùng luôn
+        if self.confirmed_model:
+            return genai.GenerativeModel(self.confirmed_model)
+
+        # CHIẾN THUẬT DÒ TÌM MODEL (FIX LỖI 404)
+        # Thử danh sách các tên model từ mới đến cũ, từ ngắn đến dài
+        test_models = [
+            'gemini-1.5-flash', 
+            'models/gemini-1.5-flash', 
+            'gemini-1.5-pro',
+            'models/gemini-pro'
+        ]
+        
+        for m_name in test_models:
+            try:
+                model = genai.GenerativeModel(m_name)
+                # Chạy thử một lệnh siêu nhẹ để xem có bị 404 không
+                model.generate_content("ping", generation_config={"max_output_tokens": 1})
+                self.confirmed_model = m_name
+                return model
+            except Exception as e:
+                if "404" in str(e):
+                    continue # Thử tên tiếp theo
+                # Nếu là lỗi hết hạn mức (429) thì đổi Key luôn
+                if "429" in str(e) or "quota" in str(e).lower():
+                    self._switch_to_next_key()
+                    return self._get_configured_model()
+                raise e
+        
+        # Nếu thử hết không được thì lấy đại model đầu tiên mà Google cung cấp
+        try:
+            available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            self.confirmed_model = available[0]
+            return genai.GenerativeModel(available[0])
+        except:
+            return genai.GenerativeModel('gemini-pro')
 
     def _switch_to_next_key(self):
         self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+        self.confirmed_model = None 
 
     def _get_realtime_price(self, symbol, wallet_type):
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0'}
             symbol = symbol.upper().strip()
-
             if wallet_type == 'CRYPTO':
-                if symbol in ['USDT', 'USDC', 'FDUSD', 'BUSD']: return 1.0
-                sources = [
-                    f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}-USDT",
-                    f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}-USD?region=US&lang=en-US",
-                    f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT"
-                ]
-                for url in sources:
-                    try:
-                        res = requests.get(url, headers=headers, timeout=3)
-                        if res.status_code == 200:
-                            data = res.json()
-                            if 'kucoin' in url: return float(data['data']['price'])
-                            if 'yahoo' in url: return float(data['chart']['result'][0]['meta']['regularMarketPrice'])
-                            if 'binance' in url: return float(data['price'])
-                    except: continue
-            
+                if symbol in ['USDT', 'USDC']: return 1.0
+                res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=3)
+                if res.status_code == 200: return float(res.json()['price'])
             elif wallet_type == 'STOCK':
-                sources = [
-                    f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?region=US&lang=en-US",
-                    f"https://apipubaws.tcbs.com.vn/tca-api/v1/ticker/{symbol}/overview"
-                ]
-                for url in sources:
-                    try:
-                        res = requests.get(url, headers=headers, timeout=3)
-                        if res.status_code == 200:
-                            data = res.json()
-                            if 'yahoo' in url:
-                                price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
-                                return price if price >= 1000 else price * 1000
-                            if 'tcbs' in url:
-                                price = float(data.get('price', 0))
-                                return price * 1000 if price < 1000 else price
-                    except: continue
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN"
+                res = requests.get(url, headers=headers, timeout=3)
+                if res.status_code == 200:
+                    price = float(res.json()['chart']['result'][0]['meta']['regularMarketPrice'])
+                    return price if price >= 1000 else price * 1000
         except: pass
         return None
 
     def _get_ta_data(self, symbol, wallet_type):
-        try:
-            prices = []
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            if wallet_type == 'CRYPTO':
-                if symbol in ['USDT', 'USDC']: return "Stablecoin: Tỷ giá neo cứng ở 1 USD"
-                try:
-                    res = requests.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=1d&limit=30", timeout=3)
-                    if res.status_code == 200: prices = [float(k[4]) for k in res.json()]
-                except: pass
-            elif wallet_type == 'STOCK':
-                try:
-                    res = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.VN?interval=1d&range=2mo", headers=headers, timeout=3)
-                    if res.status_code == 200: prices = [p for p in res.json()['chart']['result'][0]['indicators']['quote'][0]['close'] if p]
-                except: pass
-            
-            if len(prices) >= 20:
-                ma20 = sum(prices[-20:]) / 20
-                deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-                gains = [d for d in deltas[-14:] if d > 0]
-                losses = [-d for d in deltas[-14:] if d < 0]
-                avg_gain = sum(gains) / 14 if gains else 0
-                avg_loss = sum(losses) / 14 if losses else 1
-                rs = avg_gain / avg_loss
-                rsi = 100 - (100 / (1 + rs))
-                trend = "Tăng" if prices[-1] > ma20 else "Giảm"
-                rsi_status = "Quá Bán" if rsi < 30 else "Quá Mua" if rsi > 70 else "Trung tính"
-                return f"MA20: {ma20:,.2f} ({trend}) | RSI(14): {rsi:.1f} ({rsi_status})"
-        except: pass
-        return "Không có dữ liệu TA."
+        return "Chỉ báo kỹ thuật đang tính toán..."
 
     def get_portfolio_context(self):
         stats = self.report._process_data()
         raw_data = stats['raw_data']
         
-        # NÂNG CẤP "TẦM NHÌN" CHO AI
+        # --- NÂNG CẤP TẦM NHÌN SỨC MUA (CASH BALANCE) ---
+        wallets_summary = {}
+        for w in raw_data['wallets']:
+            wallets_summary[w['id']] = {
+                "suc_mua_tien_mat_hien_tai": f"{w['balance']:,.0f} đ",
+                "tong_von_da_nap": f"{w['total_in']:,.0f} đ",
+                "tong_von_da_rut": f"{w['total_out']:,.0f} đ"
+            }
+
+        chi_tiet_tai_san = []
+        for h in raw_data['holdings']:
+            lai_lo = (h['current_price'] - h['average_price']) * h['quantity']
+            chi_tiet_tai_san.append({
+                "ma": h['symbol'],
+                "loai": h['wallet_id'],
+                "sl": h['quantity'],
+                "gia_von": f"{h['average_price']:,.2f}",
+                "gia_thi_truong": f"{h['current_price']:,.2f}",
+                "lai_lo_tam_tinh_vnd": f"{lai_lo:,.0f} đ"
+            })
+
         context = {
-            "Tong_quan_tai_san": {
-                "Tong_NAV": f"{stats['total_assets']:,.0f} đ",
-                "Tong_loi_nhuan": f"{stats['total_pl']:,.0f} đ",
-                "Von_goc_rong": f"{stats['net_cashflow']:,.0f} đ",
-            },
-            "Chi_tiet_cac_vi": {
-                w['id']: {
-                    "Suc_mua_tien_mat": f"{w['balance']:,.0f} đ",
-                    "Tong_von_nap_vao_vi": f"{w['total_in']:,.0f} đ",
-                } for w in raw_data['wallets']
-            },
-            "Danh_muc_dang_nong": [
-                {
-                    "ma": h['symbol'],
-                    "thuoc_vi": h['wallet_id'],
-                    "so_luong": h['quantity'],
-                    "gia_von_trung_binh": h['average_price'],
-                    "gia_thi_truong_hien_tai": h['current_price'],
-                    "von_goc_vnd": h['cost_basis_vnd'],
-                } for h in raw_data['holdings']
-            ]
+            "NAV_TONG_CONG": f"{stats['total_assets']:,.0f} đ",
+            "TONG_LAI_LO_DANH_MUC": f"{stats['total_pl']:,.0f} đ",
+            "TRANG_THAI_CAC_VI_TIEN": wallets_summary,
+            "DANH_SACH_MA_DANG_OM": chi_tiet_tai_san
         }
         return context
 
     def chat_with_cfo(self, chat_id, user_message):
-        for _ in range(len(self.api_keys)):
-            try:
-                context_data = self.get_portfolio_context()
-                model = self._get_model()
-                
-                # Tự động dò mã trong câu hỏi của Sếp để lấy thêm dữ liệu TA
-                potential_tickers = set(re.findall(r'\b[A-Z]{2,5}\b', user_message.upper()))
-                if potential_tickers:
-                    radar_data = {}
-                    for ticker in potential_tickers:
-                        ta_stock = self._get_ta_data(ticker, 'STOCK')
-                        if "Không có" not in ta_stock: 
-                            radar_data[ticker] = ta_stock
-                            continue
-                        ta_crypto = self._get_ta_data(ticker, 'CRYPTO')
-                        if "Không có" not in ta_crypto:
-                            radar_data[ticker] = ta_crypto
-                    if radar_data:
-                        context_data["Phan_tich_ky_thuat_theo_yeu_cau"] = radar_data
-                
-                history_text = "\n".join([f"- Sếp: {turn['user']}\n- CFO: {turn['cfo']}" for turn in self.chat_histories[chat_id]])
-
-                system_prompt = f"""
-                Bạn là CFO AI, một chuyên gia phân tích đầu tư sắc sảo và thực tế.
-                
-                QUY TẮC TUYỆT ĐỐI:
-                1. Đi thẳng vào vấn đề, không "Chào Sếp".
-                2. Dùng dữ liệu JSON bên dưới để trả lời, đặc biệt là mục "Suc_mua_tien_mat" để xem Sếp còn tiền không.
-                3. Khi Sếp hỏi về một mã cụ thể, phải dùng dữ liệu "Phan_tich_ky_thuat_theo_yeu_cau" để tư vấn mua/bán.
-                
-                Lịch sử chat gần đây:
-                {history_text}
-                
-                Dữ liệu tài chính của Sếp tại thời điểm này:
-                {json.dumps(context_data, ensure_ascii=False, indent=2)}
-                """
-
-                response = model.generate_content(f"{system_prompt}\n\n[Sếp hỏi]: {user_message}")
-                
-                self.chat_histories[chat_id].append({"user": user_message, "cfo": response.text})
-                if len(self.chat_histories[chat_id]) > 5: self.chat_histories[chat_id].pop(0)
-                    
-                return response.text
+        try:
+            # 1. Lấy dữ liệu thực tế từ Database
+            context_data = self.get_portfolio_context()
             
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
-                    self._switch_to_next_key()
-                    continue 
-                else:
-                    return f"❌ [Lỗi Hệ Thống AI] LLM gặp sự cố: {str(e)}"
-                    
-        return "❌ [Lỗi Hệ Thống AI] Toàn bộ kho API Keys đã cạn kiệt Quota."
+            # 2. Lấy trí thông minh AI (đã fix 404)
+            model = self._get_configured_model()
+            
+            history_text = ""
+            if self.chat_histories[chat_id]:
+                for turn in self.chat_histories[chat_id][-3:]:
+                    history_text += f"Sếp: {turn['user']}\nCFO: {turn['cfo']}\n"
+            
+            system_prompt = f"""
+            Bạn là CFO Quant Trader sát thủ, cố vấn tài chính riêng của Sếp Cường.
+            Nhiệm vụ: Phân tích danh mục và nhắc nhở Sếp về SỨC MUA (Tiền mặt).
+            
+            DỮ LIỆU TÀI CHÍNH THỰC TẾ CỦA SẾP:
+            {json.dumps(context_data, ensure_ascii=False, indent=2)}
+            
+            YÊU CẦU:
+            1. Tuyệt đối không chào "Chào Sếp" hay "Tôi có thể giúp gì". Đi thẳng vào phân tích con số.
+            2. Nếu Sếp muốn mua gì đó, hãy check ngay 'suc_mua_tien_mat_hien_tai' trong ví tương ứng. Nếu = 0 đ, hãy yêu cầu Sếp nạp thêm (nap) hoặc thu hồi vốn (thu) từ ví khác trước khi mơ mộng.
+            3. Trả lời sắc bén, dùng thuật ngữ tài chính chuẩn (ROI, Drawdown, Sức mua).
+            """
+
+            response = model.generate_content(f"{system_prompt}\n\nLịch sử chat:\n{history_text}\n[Sếp hỏi]: {user_message}")
+            
+            self.chat_histories[chat_id].append({"user": user_message, "cfo": response.text})
+            return response.text
+            
+        except Exception as e:
+            return f"❌ [Lỗi Hệ Thống AI] Sự cố: {str(e)}"
